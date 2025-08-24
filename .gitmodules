@@ -1,0 +1,12 @@
+[submodule "robot_disco"]
+	path = src/robot_disco
+	url = https://github.com/r1b4z01d/Robot_Disco.git
+[submodule "AprilTag_Detection"]
+	path = src/AprilTag_Detection
+	url = https://github.com/StanleyChueh/AprilTag_Detection.git
+[submodule "apriltag_ros"]
+	path = src/apriltag_ros
+	url = https://github.com/Adlink-ROS/apriltag_ros.git
+[submodule "pyDHgripper"]
+	path = src/pyDHgripper
+	url = https://github.com/r1b4z01d/pyDHgripper
