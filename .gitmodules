@@ -1,18 +1,33 @@
 [submodule "robot_disco"]
 	path = src/robot_disco
 	url = https://github.com/r1b4z01d/Robot_Disco.git
-[submodule "AprilTag_Detection"]
-	path = src/AprilTag_Detection
-	url = https://github.com/StanleyChueh/AprilTag_Detection.git
+[submodule "apriltag"]
+	path = src/apriltag
+	url = https://github.com/AprilRobotics/apriltag.git
 [submodule "apriltag_ros"]
 	path = src/apriltag_ros
 	url = https://github.com/Adlink-ROS/apriltag_ros.git
+[submodule "AprilTag_Detection"]
+	path = src/AprilTag_Detection
+	url = https://github.com/StanleyChueh/AprilTag_Detection.git
 [submodule "pyDHgripper"]
 	path = src/pyDHgripper
 	url = https://github.com/r1b4z01d/pyDHgripper
+[submodule "roboclaw_hardware_interface"]
+	path = src/roboclaw_hardware_interface
+	url = https://github.com/dumbotics/roboclaw_hardware_interface.git
+[submodule "roboclaw_serial"]
+	path = src/roboclaw_serial
+	url = https://github.com/dumbotics/roboclaw_serial.git
 [submodule "roboclaw_ros"]
 	path = src/roboclaw_ros
 	url = https://github.com/norlab-ulaval/roboclaw_ros.git
+[submodule "norlab_custom_interfaces"]
+	path = src/norlab_custom_interfaces
+	url = https://github.com/norlab-ulaval/norlab_custom_interfaces.git
 [submodule "velodyne"]
 	path = src/velodyne
 	url = https://github.com/ros-drivers/velodyne.git
+[submodule "roboclaw_hardware_interface"]
+	path = src/roboclaw_hardware_interface
+	url = https://github.com/dumbotics/roboclaw_hardware_interface.git
