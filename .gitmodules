@@ -10,3 +10,9 @@
 [submodule "pyDHgripper"]
 	path = src/pyDHgripper
 	url = https://github.com/r1b4z01d/pyDHgripper
+[submodule "roboclaw_ros"]
+	path = src/roboclaw_ros
+	url = https://github.com/norlab-ulaval/roboclaw_ros.git
+[submodule "velodyne"]
+	path = src/velodyne
+	url = https://github.com/ros-drivers/velodyne.git
