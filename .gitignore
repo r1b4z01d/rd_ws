@@ -37,6 +37,6 @@ ehthumbs.db
 Thumbs.db
 
 # Directories
-./install/*
-./build/*
-./log/*
+install/
+build/
+log/

@@ -1,0 +1,242 @@
+{
+  "configById": {
+    "3D!2qkdps2": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 10.26684166558739,
+        "phi": 26.317298671275683,
+        "thetaOffset": 82.24137932937049,
+        "targetOffset": [
+          -0.2532001208079085,
+          1.1427939166052536,
+          9.399883912838883e-17
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {
+        "frame:body_link": {
+          "visible": false
+        },
+        "frame:base_link": {
+          "visible": false
+        },
+        "frame:cover_link": {
+          "visible": false
+        },
+        "frame:front_bumper_link": {
+          "visible": false
+        },
+        "frame:imu_link": {
+          "visible": false
+        },
+        "frame:rear_bumper_link": {
+          "visible": false
+        },
+        "frame:front_light_link": {
+          "visible": false
+        },
+        "frame:rear_light_link": {
+          "visible": false
+        },
+        "frame:odom": {
+          "visible": false
+        },
+        "frame:fl_wheel_link": {
+          "visible": false
+        },
+        "frame:fr_wheel_link": {
+          "visible": false
+        },
+        "frame:rl_wheel_link": {
+          "visible": false
+        },
+        "frame:rr_wheel_link": {
+          "visible": false
+        },
+        "frame:laser": {
+          "visible": false
+        },
+        "frame:velodyne": {
+          "visible": false
+        },
+        "frame:map": {
+          "visible": false
+        },
+        "frame:oak_rgb_camera_optical_frame": {
+          "visible": false
+        },
+        "frame:lights_channel_1": {
+          "visible": false
+        }
+      },
+      "topics": {
+        "/robot_description": {
+          "visible": true
+        },
+        "/velodyne/scan": {
+          "visible": false
+        },
+        "/rplidar/scan": {
+          "visible": false,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/velodyne/filtered_scan": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/rplidar/filtered_scan": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo"
+        },
+        "/plan": {
+          "visible": true
+        },
+        "/oak/rgb/image_rect/compressed": {
+          "visible": false,
+          "cameraInfoTopic": "/oak/rgb/camera_info",
+          "distance": 1.6,
+          "planarProjectionFactor": 0.4
+        },
+        "/oak/rgb/image_raw/compressed": {
+          "visible": true,
+          "cameraInfoTopic": "/oak/rgb/camera_info",
+          "distance": 1.5,
+          "planarProjectionFactor": 0.3
+        },
+        "/map": {
+          "visible": true
+        },
+        "/lights/driver/channel_1_frame": {
+          "visible": true,
+          "cameraInfoTopic": "/oak/rgb/camera_info",
+          "distance": 1.4,
+          "planarProjectionFactor": 0.5
+        }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {}
+    },
+    "Indicator!2fxlqip": {
+      "path": "/battery.current",
+      "style": "background",
+      "fallbackColor": "#a0a0a0",
+      "fallbackLabel": "No",
+      "rules": [
+        {
+          "operator": ">",
+          "rawValue": "0",
+          "color": "#13ff00",
+          "label": "Yes"
+        }
+      ],
+      "foxglovePanelTitle": "Charging"
+    },
+    "Gauge!37lbj6l": {
+      "path": "/battery.percentage",
+      "minValue": 0,
+      "maxValue": 1,
+      "colorMap": "red-yellow-green",
+      "colorMode": "colormap",
+      "gradient": [
+        "#0000ff",
+        "#ff00ff"
+      ],
+      "reverse": false,
+      "foxglovePanelTitle": "Battery"
+    },
+    "CallDeliveryService!1q5fi6f": {
+      "requestPayload": "{\"input_integer\":1}",
+      "layout": "vertical",
+      "serviceName": "/set_integers",
+      "buttonTooltip": "Send On Delivery",
+      "buttonText": "Delivery",
+      "buttonColor": "rgb(255, 255, 0)"
+    },
+    "CallDeliveryService!34p78lo": {
+      "requestPayload": "{}",
+      "layout": "vertical",
+      "serviceName": "/hardware/e_stop_trigger",
+      "buttonTooltip": "E-Stop",
+      "buttonText": "Emergency Stop",
+      "buttonColor": "rgb(255, 0, 0)"
+    },
+    "CallDeliveryService!i6mgbu": {
+      "requestPayload": "{}",
+      "layout": "vertical",
+      "serviceName": "/hardware/e_stop_reset",
+      "buttonTooltip": "Reset TaskBot Emergency Stop",
+      "buttonText": "Reset E-Stop",
+      "buttonColor": "rgb(0, 255, 0)"
+    },
+    "CallDeliveryService!18n1vz0": {
+      "requestPayload": "{\"input_integer\":2}",
+      "layout": "vertical",
+      "serviceName": "/set_integers",
+      "buttonTooltip": "Return to the docking station.",
+      "buttonText": "Dock",
+      "buttonColor": "rgb(255, 255, 0)",
+      "foxglovePanelTitle": "Return To Dock"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": {
+      "first": "3D!2qkdps2",
+      "second": {
+        "first": "Indicator!2fxlqip",
+        "second": "Gauge!37lbj6l",
+        "direction": "row"
+      },
+      "direction": "column",
+      "splitPercentage": 84.26339285714286
+    },
+    "second": {
+      "first": {
+        "first": "CallDeliveryService!1q5fi6f",
+        "second": "CallDeliveryService!18n1vz0",
+        "direction": "column"
+      },
+      "second": {
+        "first": "CallDeliveryService!34p78lo",
+        "second": "CallDeliveryService!i6mgbu",
+        "direction": "column"
+      },
+      "direction": "column"
+    }
+  }
+}
