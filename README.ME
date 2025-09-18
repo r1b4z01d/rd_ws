@@ -11,3 +11,12 @@ ros2 run tf2_ros static_transform_publisher 0.20 0.00 0.0 3.15 1.6 0.0 purple_cu
 
 ros2 launch realsense2_camera rs_launch.py pointcloud.enable:=true device_type:=d435 
 ros2 launch apriltag_ros tag_realsense.launch.py 
+
+
+ros2 launch robot_disco launch_robot.launch.py 
+ros2 launch robot_disco localization_launch.py 
+ros2 launch robot_disco navigation_launch.py 
+
+
+docker run --rm -p "8080:8080" -v ./foxglove-layout.json:/foxglove/default-layout.json RobotDisco/foxglove
+ros2 launch robot_disco foxglove_bridge_launch.xml 
