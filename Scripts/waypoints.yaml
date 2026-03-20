@@ -1,0 +1,38 @@
+waypoints:
+  - name: charger
+    position: {x: 2.98826, y: 1.99461, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.00388155, w: 0.999992}
+    post_actions:
+      - 'ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState  "{percentage: 0.82, power_supply_status: 0}"'
+      - ffplay -ss 01:55:29 -nodisp -autoexit -loglevel quiet /home/rd/Music/Coyu_Kingdom_2018.mp3
+  - name: workshop_door
+    position: {x: 5.51482, y: 1.9843, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.00892437, w: 0.99996} 
+  - name: kitchen
+    position: {x: 7.637443708942173, y: 2.037549881541021, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.5560329128819357, w: 0.831160273227751}
+  - name: dining
+    position: {x: 8.448622404761196, y: 5.041039509345806, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z:  0.5572965889358368, w: 0.8303135022149651}
+  - name: couch_right
+    position: {x: 8.630867873015767, y:  8.290248150412149, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.9861117100731979, w: 0.16608339849760204}
+    post_actions:
+      - ROS_DOMAIN_ID=0 ros2 service call /ur5e/dashboard_client/play std_srvs/srv/Trigger {}
+  - name: couch_center
+    position: {x: 6.104091057465749, y: 8.290248150412149, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.2083138388450837, w:  0.9780620351213027}
+
+initial_pose:
+  position:
+    x: 0.361582
+    y: -0.138768
+    z: 0.0
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: 0.0123205
+    w: 0.999924
+  post_actions:
+    - 'ROS_DOMAIN_ID=0 ros2 topic pub --once /battery sensor_msgs/BatteryState  "{percentage: 0.82, power_supply_status: 1}"'
+    

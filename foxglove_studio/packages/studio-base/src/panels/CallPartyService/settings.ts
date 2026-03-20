@@ -14,10 +14,10 @@ import { Config } from "./types";
 export const defaultConfig: Config = {
   requestPayload:  "{\n 'input_integer': 1 \n}",
   layout: "vertical",
-  serviceName: "/set_integers",
-  buttonTooltip: "Send On Delivery",
-  buttonText: "Delivery",
-  buttonColor: "rgb(255, 255, 0)",
+  serviceName: "/living_room_party_on",
+  buttonTooltip: "Request Party",
+  buttonText: "Party In Living Room",
+  buttonColor: "rgba(138, 0, 96, 1)",
 };
 
 export function settingsActionReducer(prevConfig: Config, action: SettingsTreeAction): Config {

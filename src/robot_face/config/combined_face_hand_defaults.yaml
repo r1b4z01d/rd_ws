@@ -1,0 +1,25 @@
+combined_face_hand:
+  ros__parameters:
+    image_topic: "/camera/camera/color/image_raw"
+    hand_in_eyes: true
+    mirror: true
+    width: 1280
+    height: 720
+    fps: 30.0
+    relay_hand: true
+    hand_hotkey: "ctrl+shift+h"
+    hand_host: "192.168.1.194"
+    hand_port: 8765
+    hand_rate: 20.0
+    hand_speed: 1000
+    hand_panel_height: 1000
+    hand_panel_fraction: 0.8
+    hand_panel_scale: 1.0
+    blink_min: 2.5
+    blink_max: 15.5
+    blink_duration: 0.14
+    blink_closed_hold: 0.05
+    gaze_speed: 0.3
+    gaze_idle_speed: 0.01
+    save_raw_video: "/tmp/raw_camera.mp4"      # set to null or "" to disable
+    save_video: "/tmp/combined_output.mp4"     # set to null or "" to disable

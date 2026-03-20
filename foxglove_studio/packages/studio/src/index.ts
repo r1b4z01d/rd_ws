@@ -382,7 +382,17 @@ export type PanelExtensionContext = {
    * @param request The request payload for the service call
    * @returns A promise that resolves when the result is available or rejected with an error
    */
-  callDeliveryService?(service: string, request: unknown): Promise<unknown>;
+  callPartyService?(service: string, request: unknown): Promise<unknown>;
+
+  /**
+   * Call a service.
+   *
+   * @param service The name of the service to call
+   * @param request The request payload for the service call
+   * @returns A promise that resolves when the result is available or rejected with an error
+   */
+  callEStopService?(service: string, request: unknown): Promise<unknown>;
+
 
 
   /**

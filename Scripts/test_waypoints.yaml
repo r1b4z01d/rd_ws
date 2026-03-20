@@ -1,0 +1,19 @@
+waypoints:
+  - name: goal_2
+    position: {x: 8.640634, y: 8.029872, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.7263535854321758, w: 0.6873212268872707}
+    post_actions:
+      - 'ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState  "{percentage: 0.82, power_supply_status: 0}"'
+  - name: goal_3
+    position: {x: 8.82677703747866, y: 7.351027438176554, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.62987087805, w: 0.776699862}
+initial_pose:
+  position:
+    x: 8.715512368012241
+    y: 8.775592311606015
+    z: 0.0
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: -0.706051828029685
+    w: 0.7081601627710642

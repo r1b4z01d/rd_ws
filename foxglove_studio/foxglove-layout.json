@@ -1,15 +1,120 @@
 {
   "configById": {
-    "3D!2qkdps2": {
+    "Gauge!176eoid": {
+      "path": "/battery.percentage",
+      "minValue": 0,
+      "maxValue": 1,
+      "colorMap": "red-yellow-green",
+      "colorMode": "colormap",
+      "gradient": [
+        "#0000ff",
+        "#ff00ff"
+      ],
+      "reverse": false,
+      "foxglovePanelTitle": "Battery"
+    },
+    "Indicator!2vvt0pw": {
+      "path": "/battery.power_supply_status",
+      "style": "background",
+      "fallbackColor": "#a0a0a0",
+      "fallbackLabel": "False",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "0",
+          "color": "#68e24a",
+          "label": "True"
+        }
+      ]
+    },
+    "CallPartyService!4e7ws2f": {
+      "requestPayload": "{}",
+      "layout": "vertical",
+      "serviceName": "/stop_motor",
+      "buttonTooltip": "E-Stop",
+      "buttonText": "E-Stop",
+      "buttonColor": "rgba(255, 0, 0, 1)",
+      "foxglovePanelTitle": "E-Stop"
+    },
+    "Image!3mnp456": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {
+        "imageTopic": "/camera/camera/color/image_raw",
+        "calibrationTopic": "/camera/camera/color/camera_info"
+      }
+    },
+    "3D!18i6zy7": {
+      "layers": {
+        "845139cb-26bc-40b3-8161-8ab60af4baf5": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid",
+          "instanceId": "845139cb-26bc-40b3-8161-8ab60af4baf5",
+          "layerId": "foxglove.Grid",
+          "size": 10,
+          "divisions": 10,
+          "lineWidth": 1,
+          "color": "#248eff",
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        }
+      },
       "cameraState": {
         "perspective": true,
-        "distance": 10.26684166558739,
-        "phi": 26.317298671275683,
-        "thetaOffset": 82.24137932937049,
+        "distance": 16.290124999749654,
+        "phi": 28.285771584041395,
+        "thetaOffset": 121.74228526445334,
         "targetOffset": [
-          -0.2532001208079085,
-          1.1427939166052536,
-          9.399883912838883e-17
+          1.496045892091069,
+          -0.0555064464233874,
+          -2.693904032310813e-16
         ],
         "target": [
           0,
@@ -27,117 +132,136 @@
         "far": 5000
       },
       "followMode": "follow-pose",
+      "followTf": "map",
       "scene": {},
       "transforms": {
-        "frame:body_link": {
+        "frame:left_wheel": {
           "visible": false
         },
         "frame:base_link": {
           "visible": false
         },
-        "frame:cover_link": {
-          "visible": false
-        },
-        "frame:front_bumper_link": {
-          "visible": false
-        },
-        "frame:imu_link": {
-          "visible": false
-        },
-        "frame:rear_bumper_link": {
-          "visible": false
-        },
-        "frame:front_light_link": {
-          "visible": false
-        },
-        "frame:rear_light_link": {
+        "frame:right_wheel": {
           "visible": false
         },
         "frame:odom": {
           "visible": false
         },
-        "frame:fl_wheel_link": {
-          "visible": false
-        },
-        "frame:fr_wheel_link": {
-          "visible": false
-        },
-        "frame:rl_wheel_link": {
-          "visible": false
-        },
-        "frame:rr_wheel_link": {
-          "visible": false
-        },
-        "frame:laser": {
-          "visible": false
-        },
-        "frame:velodyne": {
-          "visible": false
-        },
         "frame:map": {
           "visible": false
         },
-        "frame:oak_rgb_camera_optical_frame": {
+        "frame:base_footprint": {
           "visible": false
         },
-        "frame:lights_channel_1": {
+        "frame:chassis": {
+          "visible": false
+        },
+        "frame:caster_wheel_fl": {
+          "visible": false
+        },
+        "frame:caster_wheel_fr": {
+          "visible": false
+        },
+        "frame:caster_wheel_bl": {
+          "visible": false
+        },
+        "frame:caster_wheel_br": {
+          "visible": false
+        },
+        "frame:velodyne_frame": {
+          "visible": false
+        },
+        "frame:rp_s1_lidar": {
+          "visible": false
+        },
+        "frame:rp_s2e_lidar": {
+          "visible": false
+        },
+        "frame:camera_link": {
+          "visible": false
+        },
+        "frame:camera_link_optical": {
+          "visible": false
+        },
+        "frame:camera_depth_frame": {
+          "visible": false
+        },
+        "frame:camera_depth_optical_frame": {
+          "visible": false
+        },
+        "frame:camera_color_frame": {
+          "visible": false
+        },
+        "frame:camera_color_optical_frame": {
           "visible": false
         }
       },
       "topics": {
-        "/robot_description": {
-          "visible": true
-        },
-        "/velodyne/scan": {
-          "visible": false
-        },
-        "/rplidar/scan": {
-          "visible": false,
-          "colorField": "intensity",
-          "colorMode": "colormap",
-          "colorMap": "turbo"
-        },
-        "/velodyne/filtered_scan": {
-          "visible": true,
-          "colorField": "intensity",
-          "colorMode": "colormap",
-          "colorMap": "turbo"
-        },
-        "/rplidar/filtered_scan": {
-          "visible": true,
-          "colorField": "intensity",
-          "colorMode": "colormap",
-          "colorMap": "turbo"
-        },
-        "/plan": {
-          "visible": true
-        },
-        "/oak/rgb/image_rect/compressed": {
-          "visible": false,
-          "cameraInfoTopic": "/oak/rgb/camera_info",
-          "distance": 1.6,
-          "planarProjectionFactor": 0.4
-        },
-        "/oak/rgb/image_raw/compressed": {
-          "visible": true,
-          "cameraInfoTopic": "/oak/rgb/camera_info",
-          "distance": 1.5,
-          "planarProjectionFactor": 0.3
-        },
         "/map": {
           "visible": true
         },
-        "/lights/driver/channel_1_frame": {
+        "/global_costmap/costmap": {
           "visible": true,
-          "cameraInfoTopic": "/oak/rgb/camera_info",
-          "distance": 1.4,
-          "planarProjectionFactor": 0.5
+          "colorMode": "costmap",
+          "alpha": 0.40000000000000013
+        },
+        "/goal_pose": {
+          "visible": true
+        },
+        "/robot_description": {
+          "visible": true
+        },
+        "/velodyne_points": {
+          "visible": true,
+          "colorField": "time",
+          "colorMode": "colormap",
+          "colorMap": "rainbow",
+          "pointShape": "circle",
+          "stixelsEnabled": false,
+          "pointSize": 2,
+          "decayTime": 1,
+          "explicitAlpha": 0.6
+        },
+        "/transformed_global_plan": {
+          "visible": true
+        },
+        "/scan": {
+          "visible": false,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 2.19
+        },
+        "/move_base_simple/goal": {
+          "visible": true
+        },
+        "/initialpose": {
+          "visible": true
+        },
+        "/waypoints_path": {
+          "visible": true,
+          "type": "line",
+          "gradient": [
+            "#fabe17ff",
+            "#f3f22780"
+          ],
+          "lineWidth": 0.2015
+        },
+        "/camera/camera/color/image_raw": {
+          "visible": false,
+          "frameLocked": true,
+          "cameraInfoTopic": "/camera/camera/color/camera_info",
+          "distance": 2.809,
+          "planarProjectionFactor": 1,
+          "color": "#ffffff"
+        },
+        "/camera/camera/color/camera_info": {
+          "visible": false
         }
       },
-      "layers": {},
       "publish": {
-        "type": "point",
-        "poseTopic": "/move_base_simple/goal",
+        "type": "pose_estimate",
+        "poseTopic": "/goal_pose",
         "pointTopic": "/clicked_point",
         "poseEstimateTopic": "/initialpose",
         "poseEstimateXDeviation": 0.5,
@@ -146,66 +270,27 @@
       },
       "imageMode": {}
     },
-    "Indicator!2fxlqip": {
-      "path": "/battery.current",
-      "style": "background",
-      "fallbackColor": "#a0a0a0",
-      "fallbackLabel": "No",
-      "rules": [
-        {
-          "operator": ">",
-          "rawValue": "0",
-          "color": "#13ff00",
-          "label": "Yes"
-        }
-      ],
-      "foxglovePanelTitle": "Charging"
-    },
-    "Gauge!37lbj6l": {
-      "path": "/battery.percentage",
-      "minValue": 0,
-      "maxValue": 1,
-      "colorMap": "red-yellow-green",
-      "colorMode": "colormap",
-      "gradient": [
-        "#0000ff",
-        "#ff00ff"
-      ],
-      "reverse": false,
-      "foxglovePanelTitle": "Battery"
-    },
-    "CallDeliveryService!1q5fi6f": {
-      "requestPayload": "{\"input_integer\":1}",
-      "layout": "vertical",
-      "serviceName": "/set_integers",
-      "buttonTooltip": "Send On Delivery",
-      "buttonText": "Delivery",
-      "buttonColor": "rgb(255, 255, 0)"
-    },
-    "CallDeliveryService!34p78lo": {
+    "CallPartyService!zgcvse": {
       "requestPayload": "{}",
       "layout": "vertical",
-      "serviceName": "/hardware/e_stop_trigger",
-      "buttonTooltip": "E-Stop",
-      "buttonText": "Emergency Stop",
-      "buttonColor": "rgb(255, 0, 0)"
+      "serviceName": "/start_waypoints",
+      "buttonTooltip": "Request Party",
+      "buttonText": "Party In Living Room",
+      "buttonTextColor": "rgba(255, 255, 255, 255)",
+      "buttonColor": "rgba(138, 0, 96, 1)"
     },
-    "CallDeliveryService!i6mgbu": {
-      "requestPayload": "{}",
+    "CallPartyService!4cva4ds": {
+      "requestPayload": "{\n 'input_integer': 1 \n}",
       "layout": "vertical",
-      "serviceName": "/hardware/e_stop_reset",
-      "buttonTooltip": "Reset TaskBot Emergency Stop",
-      "buttonText": "Reset E-Stop",
-      "buttonColor": "rgb(0, 255, 0)"
+      "serviceName": "/Chargers",
+      "buttonTooltip": "Time To Charge?",
+      "buttonText": "Go To Charger",
+      "buttonColor": "rgba(138,255, 96, 1)",
+      "foxglovePanelTitle": "Send To Charger"
     },
-    "CallDeliveryService!18n1vz0": {
-      "requestPayload": "{\"input_integer\":2}",
-      "layout": "vertical",
-      "serviceName": "/set_integers",
-      "buttonTooltip": "Return to the docking station.",
-      "buttonText": "Dock",
-      "buttonColor": "rgb(255, 255, 0)",
-      "foxglovePanelTitle": "Return To Dock"
+    "RosOut!2s9zwr4": {
+      "searchTerms": [],
+      "minLogLevel": 1
     }
   },
   "globalVariables": {},
@@ -214,29 +299,36 @@
     "speed": 1
   },
   "layout": {
-    "direction": "row",
     "first": {
-      "first": "3D!2qkdps2",
-      "second": {
-        "first": "Indicator!2fxlqip",
-        "second": "Gauge!37lbj6l",
-        "direction": "row"
-      },
-      "direction": "column",
-      "splitPercentage": 84.26339285714286
-    },
-    "second": {
+      "direction": "row",
       "first": {
-        "first": "CallDeliveryService!1q5fi6f",
-        "second": "CallDeliveryService!18n1vz0",
-        "direction": "column"
+        "first": {
+          "first": {
+            "first": "Gauge!176eoid",
+            "second": "Indicator!2vvt0pw",
+            "direction": "column"
+          },
+          "second": "CallPartyService!4e7ws2f",
+          "direction": "column"
+        },
+        "second": "Image!3mnp456",
+        "direction": "column",
+        "splitPercentage": 78.61386138613861
       },
       "second": {
-        "first": "CallDeliveryService!34p78lo",
-        "second": "CallDeliveryService!i6mgbu",
-        "direction": "column"
+        "first": "3D!18i6zy7",
+        "second": {
+          "first": "CallPartyService!zgcvse",
+          "second": "CallPartyService!4cva4ds",
+          "direction": "column"
+        },
+        "direction": "row",
+        "splitPercentage": 83.65758754863813
       },
-      "direction": "column"
-    }
+      "splitPercentage": 20
+    },
+    "second": "RosOut!2s9zwr4",
+    "direction": "column",
+    "splitPercentage": 81.45161290322581
   }
 }

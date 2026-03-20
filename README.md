@@ -1,9 +1,12 @@
 # rd_ws
-ros2 launch ur_robot_driver ur_control.launch.py launch_rviz:=false ur_type:=ur5e robot_ip:=192.168.1.21 use_tool_communication:=true   
+ros2 launch ur_robot_driver ur_control.launch.py launch_rviz:=false ur_type:=ur5e robot_ip:=192.168.11.21 use_tool_communication:=false
 
 ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur5e launch_rviz:=true robot_ip:=192.168.1.21
 
 ros2 service call /dashboard_client/load_program ur_dashboard_msgs/srv/Load "filename: remote.urp"
+
+ros2 service call /dashboard_client/load_program ur_dashboard_msgs/srv/Load "filename: dball.urp"
+
 ros2 service call /dashboard_client/play std_srvs/srv/Trigger {}
 
 ros2 run tf2_ros static_transform_publisher 0.00175 0.002985 0.0068 0.0 0.0 3.14 flange camera_link
@@ -21,3 +24,5 @@ ros2 launch robot_disco navigation_launch.py
 
 docker run --rm -p "8080:8080" -v ./foxglove-layout.json:/foxglove/default-layout.json RobotDisco/foxglove
 ros2 launch robot_disco foxglove_bridge_launch.xml 
+
+ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState  "{percentage: 0.82, power_supply_status: 0}"

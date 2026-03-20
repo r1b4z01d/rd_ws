@@ -41,7 +41,7 @@ const getFixture = ({ allowCallService }: { allowCallService: boolean }): Fixtur
 };
 
 export default {
-  title: "panels/CallDeliveryService",
+  title: "panels/CallChargerService",
   component: CallServicePanel,
   parameters: {
     colorScheme: "both-column",

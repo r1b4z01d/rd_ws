@@ -9,7 +9,7 @@ import { makeStyles } from "tss-react/mui";
 import Log from "@foxglove/log";
 import { PanelExtensionContext, SettingsTreeAction } from "@foxglove/studio";
 import Stack from "@foxglove/studio-base/components/Stack";
-import { Config } from "@foxglove/studio-base/panels/CallDeliveryService/types";
+import { Config } from "@foxglove/studio-base/panels/CallChargerService/types";
 import ThemeProvider from "@foxglove/studio-base/theme/ThemeProvider";
 
 import { defaultConfig, settingsActionReducer, useSettingsTree } from "./settings";
@@ -106,7 +106,7 @@ function CallServiceContent(
   useEffect(() => {
     context.saveState(config);
     context.setDefaultPanelTitle(
-      `Send TaskBot On A Delivery`
+      `Send To Charger`
     );
   }, [config, context]);
 

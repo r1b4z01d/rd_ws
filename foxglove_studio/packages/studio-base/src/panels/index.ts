@@ -114,11 +114,11 @@ export const getBuiltin: (t: TFunction<"panels">) => PanelInfo[] = (t) => [
     module: async () => await import("./CallService"),
   },
   {
-    title: t("callDeliveryService"),
-    type: "CallDeliveryService",
-    description: t("callDeliveryServiceDescription"),
+    title: t("callPartyService"),
+    type: "CallPartyService",
+    description: t("callPartyServiceDescription"),
     thumbnail: publishThumbnail,
-    module: async () => await import("./CallDeliveryService"),
+    module: async () => await import("./CallPartyService"),
   },
   {
     title: t("rawMessages"),

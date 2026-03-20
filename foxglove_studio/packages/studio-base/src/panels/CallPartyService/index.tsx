@@ -12,7 +12,7 @@ import Panel from "@foxglove/studio-base/components/Panel";
 import { PanelExtensionAdapter } from "@foxglove/studio-base/components/PanelExtensionAdapter";
 import { SaveConfig } from "@foxglove/studio-base/types/panels";
 
-import { CallService } from "./CallDeliveryService";
+import { CallService } from "./CallPartyService";
 import { Config } from "./types";
 
 function initPanel(crash: ReturnType<typeof useCrash>, context: PanelExtensionContext) {
@@ -50,7 +50,7 @@ function CallServicePanelAdapter(props: Props) {
   );
 }
 
-CallServicePanelAdapter.panelType = "CallDeliveryService";
+CallServicePanelAdapter.panelType = "CallPartyService";
 CallServicePanelAdapter.defaultConfig = {};
 
 export default Panel(CallServicePanelAdapter);
