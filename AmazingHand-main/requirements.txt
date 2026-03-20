@@ -1,0 +1,14 @@
+# Core numerical and vision
+numpy>=1.23
+opencv-python>=4.7.0
+
+# Hand tracking (MediaPipe)
+mediapipe>=0.10.0
+
+# 3D transforms used in HandTracking demo
+scipy>=1.9.0
+
+# Messaging/runtime used by Demo/HandTracking/HandTracking/main.py
+pyarrow>=10.0.0
+dora-rs>=0.3.0
+

@@ -40,3 +40,4 @@ Thumbs.db
 install/
 build/
 log/
+__pycache__

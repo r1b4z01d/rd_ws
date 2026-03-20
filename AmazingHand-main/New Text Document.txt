@@ -1,0 +1,5 @@
+python AmazingHand-main/Demo/HandTracking/HandTracking/combined_face_hand.py --camera 0 --show_eyes --hand_in_eyes --mirror
+Separate hand window mirrored:
+python AmazingHand-main/Demo/HandTracking/HandTracking/combined_face_hand.py --camera 0 --show_hand --mirror
+Both windows, hand panel height 260 px, mirrored:
+python AmazingHand-main/Demo/HandTracking/HandTracking/combined_face_hand.py --camera 0 --show_eyes --show_hand --hand_in_eyes --hand_panel_height 260 --mirror

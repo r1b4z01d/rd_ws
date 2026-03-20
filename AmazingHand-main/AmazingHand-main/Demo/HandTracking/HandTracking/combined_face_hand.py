@@ -53,6 +53,22 @@ def main():
     parser.add_argument("--hand_port", type=int, default=8765, help="Hand relay TCP port")
     parser.add_argument("--hand_rate", type=float, default=20.0, help="Maximum hand relay updates per second")
     parser.add_argument("--hand_speed", type=int, default=1000, help="Servo speed value embedded in joint messages")
+    parser.add_argument(
+        "--save_raw_video",
+        type=str,
+        nargs="?",
+        const="raw_camera.mp4",
+        default=None,
+        help="Save the raw camera feed to a video file (default raw_camera.mp4 if no path is provided)",
+    )
+    parser.add_argument(
+        "--save_video",
+        type=str,
+        nargs="?",
+        const="combined_output.mp4",
+        default=None,
+        help="Save the eyes window output to a video file (default combined_output.mp4 if no path is provided)",
+    )
     args = parser.parse_args()
 
     # Single-window design: Eyes window only; hands can render in bottom panel
@@ -88,6 +104,9 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
     camera_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or args.width)
     camera_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or args.height)
+    capture_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if capture_fps <= 1e-2:
+        capture_fps = 30.0
 
     # Eyes canvas and params
     eye_canvas_width = 1080
@@ -108,6 +127,25 @@ def main():
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
     cv2.resizeWindow(window_name, eye_canvas_width, eye_canvas_height)
     set_windows_window_frame_color(window_name, (0, 0, 0))
+
+    video_fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    raw_video_writer = None
+    if args.save_raw_video:
+        raw_video_writer = cv2.VideoWriter(
+            args.save_raw_video, video_fourcc, capture_fps, (camera_width, camera_height)
+        )
+        if not raw_video_writer.isOpened():
+            print(f"Warning: could not open raw video writer at {args.save_raw_video}")
+            raw_video_writer = None
+
+    video_writer = None
+    if args.save_video:
+        video_writer = cv2.VideoWriter(
+            args.save_video, video_fourcc, capture_fps, (eye_canvas_width, eye_canvas_height)
+        )
+        if not video_writer.isOpened():
+            print(f"Warning: could not open video writer at {args.save_video}")
+            video_writer = None
 
     # Face tracking state
     tracked_face = None
@@ -149,6 +187,9 @@ def main():
             ret, frame = cap.read()
             if not ret:
                 continue
+
+            if raw_video_writer is not None:
+                raw_video_writer.write(frame)
 
             # ---- Person detection for eyes ----
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -372,6 +413,8 @@ def main():
                                 scaled_img, (target_w, target_h), interpolation=cv2.INTER_LINEAR
                             )
                     hand_panel[:] = panel_img
+                if video_writer is not None:
+                    video_writer.write(eye_canvas)
                 cv2.imshow(window_name, eye_canvas)
 
             key_code = cv2.waitKey(1) & 0xFF
@@ -380,6 +423,10 @@ def main():
 
     if hand_socket is not None:
         hand_socket.close()
+    if raw_video_writer is not None:
+        raw_video_writer.release()
+    if video_writer is not None:
+        video_writer.release()
     cap.release()
     cv2.destroyAllWindows()
 

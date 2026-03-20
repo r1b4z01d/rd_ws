@@ -1,0 +1,46 @@
+*** Begin Patch
+*** Update File: b:\Documents\Robot Disco\robotdisco face\face.py
+@@
+ def draw_eye(
+     canvas,
+     center,
+     sclera_radius,
+     pupil_radius,
+     pupil_offset,
+     blink_amount,
+     eyelid_color,
+     draw_eyelashes,
+     eyelash_color,
+     eyelash_count,
+     eyelash_length,
+     eyelash_thickness,
+ ):
+     cx, cy = center
+-    pupil_center = (int(cx + pupil_offset[0]), int(cy + pupil_offset[1]))
++    # Clamp pupil offset so the pupil stays inside the sclera
++    dx = float(pupil_offset[0])
++    dy = float(pupil_offset[1])
++    max_dist = max(sclera_radius - pupil_radius, 0)
++    dist = math.hypot(dx, dy)
++    if dist > max_dist and dist != 0:
++        s = max_dist / dist
++        dx *= s
++        dy *= s
++    pupil_center = (int(cx + dx), int(cy + dy))
+     cv2.circle(canvas, (int(cx), int(cy)), sclera_radius, (255, 255, 255), -1)
+     cv2.circle(canvas, pupil_center, pupil_radius, (0, 0, 0), -1)
+@@
+-    elif time_since_face > idle_scan_delay_seconds:
++    elif time_since_face > idle_scan_delay_seconds:
+         scan_elapsed = time_since_face - idle_scan_delay_seconds
+         sweep_angle = (2 * math.pi / idle_scan_period_seconds) * scan_elapsed
+         center = (
+-            width / 2.0 + math.sin(sweep_angle) * width * idle_scan_horizontal_fraction,
+-            height / 2.0 + math.cos(sweep_angle * 0.7) * height * idle_scan_vertical_fraction,
++            camera_width / 2.0 + math.sin(sweep_angle) * camera_width * idle_scan_horizontal_fraction,
++            camera_height / 2.0 + math.cos(sweep_angle * 0.7) * camera_height * idle_scan_vertical_fraction,
+         )
+     else:
+-        center = (width / 2.0, height / 2.0)
++        center = (camera_width / 2.0, camera_height / 2.0)
+*** End Patch
