@@ -21,8 +21,9 @@ from cv_bridge import CvBridge, CvBridgeError
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
+from std_srvs.srv import Trigger
 
-from .eye_renderer import draw_eye
+from .gl_eye_renderer import GlEyeRenderer
 from .face_utils import box_top_center, pick_face, pose_box_from_landmarks, schedule_blink
 from .hand_processing import JOINT_OPEN_OFFSETS, format_joint_command, generate_joint_offsets
 from .window_utils import (
@@ -41,7 +42,7 @@ mp_pose = mp.solutions.pose
 
 class FaceHandNode(Node):
     def __init__(self):
-        super().__init__("combined_face_hand")
+        super().__init__("robot_face")
 
         # Declare ROS parameters (defaults mirror config/combined_face_hand_defaults.yaml)
         self.declare_parameters(
@@ -116,25 +117,33 @@ class FaceHandNode(Node):
                     "Hand relay armed but global hotkeys unavailable; streaming continuously."
                 )
 
-        # Eyes canvas params
-        self.eye_canvas_width = 1080
-        self.eye_canvas_height = 1900
-        self.window_name = "Robot Disco"
-        self.eye_radius = 90
-        self.eye_white_radius = 220
+        # Eye geometry (used by GL renderer and gaze math)
+        self.eye_radius = 77        # 90 × 0.85
+        self.eye_white_radius = 187  # 220 × 0.85
         self.eye_top_margin = 80
         self.eye_side_margin = 80
-        self.eyelid_color = (30, 30, 30)
-        self.draw_eyelashes = True
-        self.eyelash_color = (50, 50, 55)
-        self.eyelash_count = 7
-        self.eyelash_length_top = 55
-        self.eyelash_length_side = 20
-        self.eyelash_thickness = 4
+        self.eyelash_count = 0  # mood: 0=neutral,1=tired,2=angry,3=happy,4=suspicious
 
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
-        cv2.resizeWindow(self.window_name, self.eye_canvas_width, self.eye_canvas_height)
-        set_windows_window_frame_color(self.window_name, (0, 0, 0))
+        hand_panel_frac = float(p("hand_panel_fraction")) if bool(p("hand_in_eyes")) else 0.0
+        self.gl_renderer = GlEyeRenderer(
+            width=1080,
+            height=1900,
+            title="Robot Disco",
+            eye_hw=float(self.eye_white_radius),
+            eye_hh=float(self.eye_radius * 2),
+            eye_side_margin=float(self.eye_side_margin),
+            eye_top_margin=float(self.eye_top_margin),
+            hand_panel_frac=hand_panel_frac,
+        )
+
+        # Mood services
+        _MOODS = {"neutral": 0, "tired": 1, "angry": 2, "happy": 3, "suspicious": 4}
+        for mood_name, mood_id in _MOODS.items():
+            self.create_service(
+                Trigger,
+                f"~/set_mood/{mood_name}",
+                lambda req, res, m=mood_id, n=mood_name: self._set_mood_cb(req, res, m, n),
+            )
 
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         raw_video_path = p("save_raw_video")
@@ -150,23 +159,6 @@ class FaceHandNode(Node):
         if raw_video_path and self.raw_video_writer is not None and not self.raw_video_writer.isOpened():
             self.get_logger().warning(f"Could not open raw video writer at {raw_video_path}")
             self.raw_video_writer = None
-
-        video_path = p("save_video")
-        if video_path in (None, "", "null"):
-            video_path = None
-        self.video_writer = (
-            cv2.VideoWriter(
-                video_path,
-                fourcc,
-                self.capture_fps,
-                (self.eye_canvas_width, self.eye_canvas_height),
-            )
-            if video_path
-            else None
-        )
-        if video_path and self.video_writer is not None and not self.video_writer.isOpened():
-            self.get_logger().warning(f"Could not open video writer at {video_path}")
-            self.video_writer = None
 
         # Face tracking state
         self.tracked_face = None
@@ -211,6 +203,14 @@ class FaceHandNode(Node):
         self.hand_panel_scale = float(p("hand_panel_scale"))
         self.gaze_speed = float(p("gaze_speed"))
         self.gaze_idle_speed = float(p("gaze_idle_speed"))
+
+    # ---------- Mood service ----------
+    def _set_mood_cb(self, _req, res: Trigger.Response, mood_id: int, mood_name: str):
+        self.eyelash_count = mood_id
+        self.get_logger().info(f"Mood set to '{mood_name}' ({mood_id})")
+        res.success = True
+        res.message = mood_name
+        return res
 
     # ---------- Utility ----------
     def clamp_speed(self, val):
@@ -369,104 +369,33 @@ class FaceHandNode(Node):
                         self.hand_socket.close()
                         self.hand_socket = None
 
-        # Prepare eyes canvas
-        eye_canvas = np.zeros((self.eye_canvas_height, self.eye_canvas_width, 3), dtype=np.uint8)
-        eye_vertical_center = self.eye_top_margin + self.eye_white_radius
-        left_eye_center = (
-            self.eye_side_margin + self.eye_white_radius,
-            eye_vertical_center,
-        )
-        right_eye_center = (
-            self.eye_canvas_width - self.eye_side_margin - self.eye_white_radius,
-            eye_vertical_center,
-        )
-        right_center_with_offset = (
-            int(right_eye_center[0] + offsetX),
-            int(right_eye_center[1] + offsetY),
-        )
-        left_center_with_offset = (
-            int(left_eye_center[0] + offsetX),
-            int(left_eye_center[1] + offsetY),
-        )
-        draw_eye(
-            eye_canvas,
-            right_eye_center,
-            self.eye_white_radius,
-            self.eye_radius,
-            (
-                right_center_with_offset[0] - right_eye_center[0],
-                right_center_with_offset[1] - right_eye_center[1],
-            ),
-            blink_amount,
-            self.eyelid_color,
-            self.draw_eyelashes,
-            self.eyelash_color,
-            self.eyelash_count,
-            self.eyelash_length_top,
-            self.eyelash_length_side,
-            self.eyelash_thickness,
-        )
-        draw_eye(
-            eye_canvas,
-            left_eye_center,
-            self.eye_white_radius,
-            self.eye_radius,
-            (
-                left_center_with_offset[0] - left_eye_center[0],
-                left_center_with_offset[1] - left_eye_center[1],
-            ),
-            blink_amount,
-            self.eyelid_color,
-            self.draw_eyelashes,
-            self.eyelash_color,
-            self.eyelash_count,
-            self.eyelash_length_top,
-            self.eyelash_length_side,
-            self.eyelash_thickness,
-        )
-
-        if self.hand_in_eyes and results is not None and results.multi_hand_landmarks:
-            half_height = max(int(self.eye_canvas_height * 0.5), 1)
-            desired_from_fraction = int(self.eye_canvas_height * self.hand_panel_fraction)
-            panel_h = min(half_height, max(desired_from_fraction, self.hand_panel_height, 1))
-            y0 = self.eye_canvas_height - panel_h
-            x0 = 0
-            hand_panel = eye_canvas[y0 : self.eye_canvas_height, x0 : self.eye_canvas_width]
-            panel_img = np.zeros_like(hand_panel)
-            mp_drawing.draw_landmarks(
-                panel_img,
-                results.multi_hand_landmarks[0],
-                mp_hands.HAND_CONNECTIONS,
-                mp_drawing_styles.get_default_hand_landmarks_style(),
-                mp_drawing_styles.get_default_hand_connections_style(),
-            )
-            if self.mirror:
-                panel_img = cv2.flip(panel_img, 1)
-            panel_scale = max(self.hand_panel_scale, 1.0)
-            if panel_scale != 1.0:
-                scaled_img = cv2.resize(
+        # Hand panel overlay
+        if self.hand_in_eyes:
+            if results is not None and results.multi_hand_landmarks:
+                pw, ph = self.gl_renderer._panel_size
+                panel_img = np.zeros((ph, pw, 3), dtype=np.uint8)
+                mp_drawing.draw_landmarks(
                     panel_img,
-                    None,
-                    fx=panel_scale,
-                    fy=panel_scale,
-                    interpolation=cv2.INTER_LINEAR,
+                    results.multi_hand_landmarks[0],
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_drawing_styles.get_default_hand_landmarks_style(),
+                    mp_drawing_styles.get_default_hand_connections_style(),
                 )
-                target_h, target_w = hand_panel.shape[:2]
-                if scaled_img.shape[0] >= target_h and scaled_img.shape[1] >= target_w:
-                    start_y = (scaled_img.shape[0] - target_h) // 2
-                    start_x = (scaled_img.shape[1] - target_w) // 2
-                    panel_img = scaled_img[start_y : start_y + target_h, start_x : start_x + target_w]
-                else:
-                    panel_img = cv2.resize(scaled_img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-            hand_panel[:] = panel_img
+                if self.mirror:
+                    panel_img = cv2.flip(panel_img, 1)
+                self.gl_renderer.update_hand_panel(panel_img)
+            else:
+                self.gl_renderer.update_hand_panel(None)
 
-        if self.video_writer is not None:
-            self.video_writer.write(eye_canvas)
-
-        cv2.imshow(self.window_name, eye_canvas)
-        key_code = cv2.waitKey(1) & 0xFF
-        if key_code == ord("q"):
-            self.get_logger().info("Quit requested via keypress; shutting down.")
+        # Render eyes via GL shader
+        self.gl_renderer.render(
+            blink=blink_amount,
+            gaze_offset=(offsetX, offsetY),
+            mood=self.eyelash_count,
+            dt=1.0 / self.capture_fps,
+        )
+        if self.gl_renderer.should_close():
+            self.get_logger().info("Window closed; shutting down.")
             rclpy.shutdown()
 
     # ---------- Cleanup ----------
@@ -475,9 +404,7 @@ class FaceHandNode(Node):
             self.hand_socket.close()
         if self.raw_video_writer is not None:
             self.raw_video_writer.release()
-        if self.video_writer is not None:
-            self.video_writer.release()
-        cv2.destroyAllWindows()
+        self.gl_renderer.destroy()
         self.pose_detector.close()
         self.hands_detector.close()
         super().destroy_node()

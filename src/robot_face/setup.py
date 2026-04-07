@@ -13,7 +13,7 @@ setup(
         ("share/" + package_name + "/launch", ["launch/combined_face_hand.launch.py"]),
         ("share/" + package_name + "/config", ["config/combined_face_hand_defaults.yaml"]),
     ],
-    install_requires=["setuptools", "numpy", "opencv-python", "mediapipe"],
+    install_requires=["setuptools", "numpy", "opencv-python", "mediapipe", "moderngl", "glfw"],
     zip_safe=True,
     maintainer="Bryan Ribas",
     maintainer_email="bryanribas@gmail.com",
