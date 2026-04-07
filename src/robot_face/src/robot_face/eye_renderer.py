@@ -1,11 +1,39 @@
-"""Rendering helpers for the animated eye canvas."""
+"""Rendering helpers for the animated eye canvas — FluxGarage RoboEyes style."""
 
 from __future__ import annotations
 
-import math
-
 import cv2
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Palette (BGR)
+# ---------------------------------------------------------------------------
+_EYE_BASE_COLOR = (120,  60,  10)   # dark blue fill
+_EYE_LINE_COLOR = (255, 185,  30)   # bright electric-blue scanlines
+_GLOW_COLOR     = (255, 220, 100)   # top-edge rim / bloom hue
+
+# ---------------------------------------------------------------------------
+# Scanline / bloom tuning
+# ---------------------------------------------------------------------------
+_WAVE_SPACING  = 10    # pixels between scanline rows
+_WAVE_AMP      = 2.5   # sine amplitude in pixels
+_WAVE_FREQ     = 0.05  # spatial frequency (rad/px)
+_GLOW_KERNEL   = 61    # blur kernel size (must be odd); controls bloom radius
+_GLOW_STRENGTH = 1.1   # bloom brightness multiplier
+
+
+def _filled_rounded_rect(canvas, x0, y0, x1, y1, r, color):
+    """Fill a rounded rectangle using rects + corner circles."""
+    if x1 <= x0 or y1 <= y0 or r < 0:
+        return
+    r = min(r, (x1 - x0) // 2, (y1 - y0) // 2)
+    cv2.rectangle(canvas, (x0 + r, y0), (x1 - r, y1), color, -1)
+    cv2.rectangle(canvas, (x0, y0 + r), (x0 + r, y1 - r), color, -1)
+    cv2.rectangle(canvas, (x1 - r, y0 + r), (x1, y1 - r), color, -1)
+    cv2.circle(canvas, (x0 + r, y0 + r), r, color, -1, cv2.LINE_AA)
+    cv2.circle(canvas, (x1 - r, y0 + r), r, color, -1, cv2.LINE_AA)
+    cv2.circle(canvas, (x0 + r, y1 - r), r, color, -1, cv2.LINE_AA)
+    cv2.circle(canvas, (x1 - r, y1 - r), r, color, -1, cv2.LINE_AA)
 
 
 def draw_eye(
@@ -23,87 +51,110 @@ def draw_eye(
     eyelash_length_side,
     eyelash_thickness,
 ):
-    cx, cy = center
-    # Ease blink curve to linger slightly at fully closed
-    coverage = max(0.0, min(1.0, blink_amount))
-    coverage = 1.0 - (1.0 - coverage) * (1.0 - coverage)
+    cx, cy = int(center[0]), int(center[1])
 
-    # Clamp pupil offset so the pupil stays inside the sclera
+    # -----------------------------------------------------------------------
+    # Geometry
+    # -----------------------------------------------------------------------
+    eye_w      = sclera_radius * 2
+    eye_h_base = pupil_radius * 2
+    eye_h      = int(eye_h_base * max(0.0, 1.0 - float(blink_amount)))
+
+    if eye_h <= 2:
+        return
+
+    corner_r = min(eye_w, eye_h) // 4
+
     dx = float(pupil_offset[0])
     dy = float(pupil_offset[1])
-    max_dist = max(sclera_radius - pupil_radius, 0)
-    dist = math.hypot(dx, dy)
-    if dist > max_dist and dist != 0:
-        s = max_dist / dist
-        dx *= s
-        dy *= s
-    pupil_center = (int(cx + dx), int(cy + dy))
-    cv2.circle(canvas, (int(cx), int(cy)), sclera_radius, (255, 255, 255), -1)
-    cv2.circle(canvas, pupil_center, pupil_radius, (0, 0, 0), -1)
+    draw_cx = int(cx + dx)
+    draw_cy = int(cy + dy)
 
-    # Shared blink geometry so lashes can follow the lid even when fully open
-    lid_radius = sclera_radius + 8
-    top_offset = lid_radius * (1.0 - coverage)
-    bottom_offset = lid_radius * (1.0 - coverage)
-    top_lid_center = (cx, cy - top_offset)
+    x0 = draw_cx - eye_w // 2
+    y0 = draw_cy - eye_h // 2
+    x1 = draw_cx + eye_w // 2
+    y1 = draw_cy + eye_h // 2
 
-    if blink_amount > 0.0:
-        # Half-circle eyelids that slide toward the eye center as the blink closes
-        top_offset_i = int(top_offset)
-        bottom_offset_i = int(bottom_offset)
-        cv2.ellipse(
-            canvas,
-            (int(cx), int(cy) - top_offset_i),
-            (lid_radius, lid_radius),
-            0,
-            180,
-            360,
-            eyelid_color,
-            -1,
-            lineType=cv2.LINE_AA,
+    h, w = canvas.shape[:2]
+
+    # -----------------------------------------------------------------------
+    # Work on an isolated layer for bloom compositing
+    # -----------------------------------------------------------------------
+    eye_layer = np.zeros_like(canvas)
+
+    # Step 1 — dark base fill
+    _filled_rounded_rect(eye_layer, x0, y0, x1, y1, corner_r, _EYE_BASE_COLOR)
+
+    # Step 2 — wavy horizontal scanlines
+    xs = np.arange(max(0, x0), min(w, x1), dtype=np.float32)
+    if len(xs) > 1:
+        for row_y in range(y0 + 2, y1 - 2, _WAVE_SPACING):
+            ys = row_y + _WAVE_AMP * np.sin(_WAVE_FREQ * xs)
+            ys = np.clip(ys, 0, h - 1).astype(np.int32)
+            pts = np.column_stack([xs.astype(np.int32), ys]).reshape(-1, 1, 2)
+            cv2.polylines(eye_layer, [pts], False, _EYE_LINE_COLOR, 1, cv2.LINE_AA)
+
+    # Step 3 — mood corner cuts (near-black overlay hides unwanted regions)
+    mood  = int(eyelash_count)
+    cut_w = int(eye_w * 0.35)
+    cut_h = int(eye_h * 0.60)
+    cc    = eyelid_color
+
+    if mood == 1:   # TIRED — top-outer corners, shallow droop
+        cw = int(eye_w * 0.40)
+        ch = int(eye_h * 0.50)
+        pts = np.array([[x0, y0], [x0 + cw, y0], [x0, y0 + ch]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        pts = np.array([[x1, y0], [x1 - cw, y0], [x1, y0 + ch]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+
+    elif mood == 2:  # ANGRY — top-inner corners, steep brow
+        pts = np.array([[x0, y0], [x0 + cut_w, y0], [x0, y0 + cut_h]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        pts = np.array([[x1, y0], [x1 - cut_w, y0], [x1, y0 + cut_h]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+
+    elif mood == 3:  # HAPPY — bottom corners squint
+        bw = int(eye_w * 0.35)
+        bh = int(eye_h * 0.55)
+        pts = np.array([[x0, y1], [x0 + bw, y1], [x0, y1 - bh]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        pts = np.array([[x1, y1], [x1 - bw, y1], [x1, y1 - bh]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+
+    elif mood == 4:  # SUSPICIOUS — top-outer shallow + bottom-inner slight
+        cw = int(eye_w * 0.30)
+        ch = int(eye_h * 0.45)
+        pts = np.array([[x0, y0], [x0 + cw, y0], [x0, y0 + ch]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        pts = np.array([[x1, y0], [x1 - cw, y0], [x1, y0 + ch]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        bi_w = int(eye_w * 0.20)
+        bi_h = int(eye_h * 0.30)
+        pts = np.array([[x0, y1], [x0 + bi_w, y1], [x0, y1 - bi_h]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+        pts = np.array([[x1, y1], [x1 - bi_w, y1], [x1, y1 - bi_h]], dtype=np.int32)
+        cv2.fillPoly(eye_layer, [pts], cc, cv2.LINE_AA)
+
+    # Step 4 — bright rim at top edge
+    if draw_eyelashes and eye_h > 10:
+        cv2.line(
+            eye_layer,
+            (x0 + corner_r, y0),
+            (x1 - corner_r, y0),
+            _GLOW_COLOR,
+            eyelash_thickness,
+            cv2.LINE_AA,
         )
-        cv2.ellipse(
-            canvas,
-            (int(cx), int(cy) + bottom_offset_i),
-            (lid_radius, lid_radius),
-            0,
-            0,
-            180,
-            eyelid_color,
-            -1,
-            lineType=cv2.LINE_AA,
-        )
 
-    if draw_eyelashes and eyelash_count > 0:
-        lash_positions = np.linspace(-1.0, 1.0, eyelash_count)
-        angles = np.linspace(math.pi + 0.35, 2 * math.pi - 0.35, eyelash_count)
-        for angle, pos in zip(angles, lash_positions):
-            blend = abs(pos)
-            length = int(
-                round(
-                    eyelash_length_top
-                    - (eyelash_length_top - eyelash_length_side) * min(blend, 1.0)
-                )
-            )
-            eye_anchor_x = cx + sclera_radius * math.cos(angle)
-            eye_anchor_y = cy + sclera_radius * math.sin(angle)
-            lid_anchor_x = top_lid_center[0] + lid_radius * math.cos(angle)
-            lid_anchor_y = top_lid_center[1] + lid_radius * math.sin(angle)
-            follow = coverage
-            start_x = int(round((1.0 - follow) * eye_anchor_x + follow * lid_anchor_x))
-            start_y = int(round((1.0 - follow) * eye_anchor_y + follow * lid_anchor_y))
-            normal_x = math.cos(angle)
-            normal_y = math.sin(angle)
-            end_x = int(start_x + normal_x * length)
-            end_y = int(start_y + normal_y * length)
-            cv2.line(
-                canvas,
-                (start_x, start_y),
-                (end_x, end_y),
-                eyelash_color,
-                eyelash_thickness,
-                lineType=cv2.LINE_AA,
-            )
+    # -----------------------------------------------------------------------
+    # Step 5 — bloom: blur the eye layer and add diffuse glow to canvas,
+    #          then composite the sharp layer on top
+    # -----------------------------------------------------------------------
+    glow = cv2.GaussianBlur(eye_layer, (_GLOW_KERNEL, _GLOW_KERNEL), 0)
+    glow_scaled = np.clip(glow.astype(np.float32) * _GLOW_STRENGTH, 0, 255).astype(np.uint8)
+    cv2.add(canvas, glow_scaled, canvas)   # diffuse bloom bleeds beyond the eye edge
+    cv2.add(canvas, eye_layer, canvas)     # crisp scanline layer on top
 
 
 __all__ = ["draw_eye"]
