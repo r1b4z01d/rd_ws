@@ -1,4 +1,4 @@
-# rd_ws — Robot Disco ROS2 Workspace
+# Robot Disco V3 - ROS2 Workspace
 
 ![Robot Disco System Architecture](documents/Robot%20Disco%20System%20Architecture.jpg)
 
