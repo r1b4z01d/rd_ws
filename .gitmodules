@@ -31,3 +31,6 @@
 [submodule "roboclaw_hardware_interface"]
 	path = src/roboclaw_hardware_interface
 	url = https://github.com/dumbotics/roboclaw_hardware_interface.git
+[submodule "AmazingHand-main"]
+	path = AmazingHand-main
+	url = git@github.com:r1b4z01d/AmazingHand.git
