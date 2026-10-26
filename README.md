@@ -1103,6 +1103,7 @@ waypoints:
         task: "pick up tigger"           #   name, run@step or a path under ~/VLA/outputs/train, and the
         seconds: 90                      #   task string it was trained with; cap on the playing phase
         still: 3                         #   finish early after N s without commanded motion (0 = off)
+        still_mode: fingers              #   all | fingers: only the fingers, once they have moved (the grasp happened)
         keep_grasp: true                 #   carry the object: hand stays closed, UR stays powered
         home: true                       #   return the arm to its home (transport) pose before driving on
 
