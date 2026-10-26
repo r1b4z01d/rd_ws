@@ -16,6 +16,8 @@
 #   preflight  aarch64 + L4T/JetPack + CUDA checks
 #   base       ../apt-packages.txt + apt-packages-jetson.txt
 #   jetson     power mode MAXN, jetson_clocks at boot, nvidia docker runtime, jtop (new phase)
+#   data       optional second drive (NVMe labelled 'data'): mount it, put ~/VLA, ~/rd_ws and the big
+#              caches on it behind symlinks, order supervisor after the mount (new phase)
 #   vla        venv with NVIDIA's CUDA torch wheels, ur_rtde/moderngl from source, lerobot[smolvla]
 #   infer      serve_ckpt symlink + vla_infer_server supervisor unit check (new phase)
 #   foxglove   never loads an x86 tarball; builds an arm64 image
@@ -26,6 +28,7 @@
 #   JETSON_PIP_INDEX=https://pypi.jetson-ai-lab.io/jp6/cu126
 #   SERVE_CKPT=/path/to/pretrained_model          what outputs/serve_ckpt should point at (phase infer)
 #   NVPMODEL=0                                     nvpmodel id (0 = MAXN on Orin dev kits)
+#   DATA_LABEL=data DATA_MOUNT=/mnt/data           filesystem label + mount point of the data drive (phase data)
 set -euo pipefail
 
 JETSON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,8 +39,10 @@ JETSON_PIP_INDEX="${JETSON_PIP_INDEX:-https://pypi.jetson-ai-lab.io/jp6/cu126}"
 JETSON_TORCH="${JETSON_TORCH:-2.8.0}"
 JETSON_TORCHVISION="${JETSON_TORCHVISION:-0.23.0}"
 NVPMODEL="${NVPMODEL:-0}"
+DATA_LABEL="${DATA_LABEL:-data}"
+DATA_MOUNT="${DATA_MOUNT:-/mnt/data}"
 NETPLAN_RENDERER="${NETPLAN_RENDERER:-NetworkManager}"   # JetPack desktops run NetworkManager
-PHASES="$PHASES jetson infer"
+PHASES="$PHASES jetson data infer"
 
 phase_preflight() {
   log "Preflight (Jetson)"
@@ -169,6 +174,103 @@ assert torch.from_numpy(np.ones(2, dtype=np.float32)).sum().item() == 2.0
 PY
 }
 
+# ---- phase data: an optional second drive holds everything big ------------------------------------
+# The AGX Orin's 64 GB eMMC filled up with datasets, checkpoints and the HF cache (2026-10-26), so a
+# 512 GB NVMe (ext4, label 'data') was fitted. ~/VLA, ~/rd_ws and the two large caches live on it
+# behind SYMLINKS, so every path in this kit, the supervisor confs, the venv shebangs
+# (#!/home/rd/VLA/.venv/bin/python3), the colcon install prefix and the workstation's rsync targets
+# stay /home/rd/... . The fstab entry is nofail (the robot must still boot without the drive), which
+# also means systemd does not order anything after it: a drop-in makes supervisor wait for the mount,
+# otherwise its autostart units would start into empty symlink targets. Idempotent: re-running on a
+# migrated box reports "(already)" and changes nothing. Without such a drive the phase is a no-op.
+data_mount() {
+  local dev uuid
+  if findmnt -rn "$DATA_MOUNT" >/dev/null 2>&1; then
+    log "$DATA_MOUNT is mounted ($(findmnt -rno SOURCE,FSTYPE "$DATA_MOUNT"))"
+  else
+    dev="$(sudo blkid -L "$DATA_LABEL" 2>/dev/null || true)"
+    [ -n "$dev" ] || return 1
+    uuid="$(sudo blkid -s UUID -o value "$dev")"
+    sudo mkdir -p "$DATA_MOUNT"
+    if ! findmnt --fstab -rn "$DATA_MOUNT" >/dev/null 2>&1; then
+      echo "UUID=$uuid $DATA_MOUNT ext4 defaults,nofail,x-systemd.device-timeout=10 0 2" | sudo tee -a /etc/fstab >/dev/null
+      log "fstab: UUID=$uuid -> $DATA_MOUNT (nofail)"
+    fi
+    sudo systemctl daemon-reload
+    sudo mount "$DATA_MOUNT"
+    log "mounted $dev at $DATA_MOUNT"
+  fi
+  sudo chmod 755 "$DATA_MOUNT"   # GNOME Disks formats the root 700
+}
+
+# Put one directory on the data drive behind a symlink. $1 = path in the home, $2 = target on the drive.
+# Already a symlink: verify. Absent: create the target and the link (a fresh box, or a re-provision of
+# a box whose drive already holds the tree). A real directory: copy (rsync -aHAX), checksum-verify,
+# swap, delete the original — refused while any process runs from it or if the target is non-empty.
+data_relocate() {
+  local src="$1" dst="$2" n users
+  if [ -L "$src" ]; then
+    [ "$(readlink -f "$src")" = "$dst" ] || die "$src is a symlink to $(readlink "$src"), expected $dst: fix by hand"
+    log "$src -> $dst (already)"
+    return 0
+  fi
+  if [ ! -e "$src" ]; then
+    sudo mkdir -p "$dst" && sudo chown "$RD_USER:$RD_USER" "$dst"
+    mkdir -p "$(dirname "$src")" && ln -s "$dst" "$src"
+    log "$src -> $dst (new)"
+    return 0
+  fi
+  [ -d "$src" ] || die "$src exists and is not a directory"
+  if [ -e "$dst" ] && [ -n "$(sudo ls -A "$dst")" ]; then
+    die "$src is a real directory and $dst already has content: decide which copy is current and move the other aside, then re-run"
+  fi
+  # cwd / exe / open files of any process inside the tree (supervisor units, the foxglove docker bind);
+  # this script and its subshell are excluded (bash keeps its script file open)
+  users="$(sudo find /proc -maxdepth 3 -regex '/proc/[0-9]+/\(cwd\|exe\|fd/[0-9]+\)' \( -lname "$src" -o -lname "$src/*" \) 2>/dev/null \
+           | cut -d/ -f3 | grep -vxE "$$|$PPID|$BASHPID" | sort -un | xargs)"
+  [ -z "$users" ] || die "$src is in use by pid(s) $users ($(ps -o comm= -p "${users// /,}" 2>/dev/null | sort -u | xargs)): stop those units (sudo supervisorctl stop <unit>) and re-run"
+  log "moving $src -> $dst ($(du -sh "$src" | cut -f1))"
+  sudo mkdir -p "$dst"
+  sudo rsync -aHAX --numeric-ids --delete "$src/" "$dst/"
+  n="$(sudo rsync -aHAXc --numeric-ids --delete --dry-run --itemize-changes "$src/" "$dst/" | grep -c '^[<>ch*]' || true)"
+  [ "$n" = 0 ] || die "$dst differs from $src after the copy ($n entries): nothing was swapped"
+  mv "$src" "$src.pre-$DATA_LABEL" && ln -s "$dst" "$src"
+  sudo rm -rf "$src.pre-$DATA_LABEL"
+  log "$src -> $dst (moved, verified, original removed)"
+}
+
+data_dropin() {
+  local d=/etc/systemd/system/supervisor.service.d f want
+  f="$d/nvme-data.conf"
+  want="[Unit]
+# ~/VLA and ~/rd_ws live on $DATA_MOUNT (rd_ws/provision/jetson/provision_jetson.sh data); the fstab entry is
+# nofail, so order supervisor after the mount explicitly or its units start into empty symlink targets
+RequiresMountsFor=$DATA_MOUNT
+"
+  if [ "$(sudo cat "$f" 2>/dev/null)" != "$(printf '%s' "$want")" ]; then
+    sudo mkdir -p "$d"
+    printf '%s' "$want" | sudo tee "$f" >/dev/null
+    sudo systemctl daemon-reload
+    log "supervisor drop-in $f"
+  fi
+}
+
+phase_data() {
+  log "Data drive (label '$DATA_LABEL' -> $DATA_MOUNT)"
+  cd "$RD_HOME"   # not inside a tree about to move
+  if ! data_mount; then
+    warn "no filesystem labelled '$DATA_LABEL' and nothing mounted at $DATA_MOUNT: everything stays on the system disk
+  (fit a drive, 'sudo mkfs.ext4 -L $DATA_LABEL /dev/nvme0n1p1', then 'provision_jetson.sh data')"
+    return 0
+  fi
+  data_relocate "$RD_HOME/VLA" "$DATA_MOUNT/VLA"
+  data_relocate "$WS" "$DATA_MOUNT/rd_ws"
+  data_relocate "$RD_HOME/.cache/huggingface" "$DATA_MOUNT/cache/huggingface"               # base VLM + Arrow copies
+  data_relocate "$RD_HOME/.cache/robot_descriptions" "$DATA_MOUNT/cache/robot_descriptions" # robot meshes
+  data_dropin
+  df -h / "$DATA_MOUNT" | sed 's/^/  /'
+}
+
 phase_infer() {
   local vla="$RD_HOME/VLA"
   log "Local VLA inference server"
@@ -187,9 +289,13 @@ phase_infer() {
     ln -sfn "$SERVE_CKPT" "$vla/outputs/serve_ckpt"
   fi
   if [ ! -e "$vla/outputs/serve_ckpt" ]; then
-    warn "outputs/serve_ckpt is not set. Copy a checkpoint from the GPU box and point the symlink at it:
-  rsync -a gpu:VLA/outputs/train/<run>/checkpoints/last/ ~/VLA/outputs/train/<run>/checkpoints/last/
-  ln -sfn ~/VLA/outputs/train/<run>/checkpoints/last/pretrained_model ~/VLA/outputs/serve_ckpt"
+    warn "outputs/serve_ckpt is not set. Ship a checkpoint from the GPU box (this box cannot reach it: relay
+  through the workstation, pretrained_model only) and point the symlink at it:
+  # workstation:
+  ssh GPU 'cd VLA/outputs/train && tar cf - <run>/capture.json <run>/checkpoints/<step>/pretrained_model' \\
+    | ssh RD 'tar xf - -C VLA/outputs/train'
+  # here:
+  ln -sfn ~/VLA/outputs/train/<run>/checkpoints/<step>/pretrained_model ~/VLA/outputs/serve_ckpt"
   fi
   # SmolVLA checkpoints only hold the action expert; the base VLM (config.json: vlm_model_name) is
   # loaded from the HuggingFace cache, and the unit runs with HF_HUB_OFFLINE=1 because the robot
@@ -230,7 +336,7 @@ phase_foxglove() {
 }
 
 phase_all() {
-  for p in preflight base jetson ros groups udev sysctl workspace face services display foxglove; do "phase_$p"; done
+  for p in preflight base jetson data ros groups udev sysctl workspace face services display foxglove; do "phase_$p"; done
   log "Done. Next: reboot, copy ~/VLA, then 'provision_jetson.sh vla infer' and finally 'provision_jetson.sh network'."
 }
 

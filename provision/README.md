@@ -116,6 +116,7 @@ overrides only what differs on JetPack 6.x (Ubuntu 22.04, aarch64):
 | `preflight` | requires aarch64, `/etc/nv_tegra_release`, Ubuntu 22.04; prints L4T + CUDA versions |
 | `base` | adds `jetson/apt-packages-jetson.txt` (boost/cmake/openblas for the source builds, `nvidia-jetpack`) |
 | `jetson` *(new)* | `nvpmodel -m 0` (MAXN), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop` |
+| `data` *(new)* | optional second drive (the 512 GB NVMe, ext4 label `data`): fstab `nofail` + mount at `/mnt/data`, then `~/VLA`, `~/rd_ws`, `~/.cache/huggingface` and `~/.cache/robot_descriptions` become **symlinks** onto it (an existing tree is rsync-copied, checksum-verified and removed; refused while something runs from it), plus a `supervisor.service.d` drop-in so the units wait for the mount. No drive → no-op. |
 | `vla` | cuSPARSELt, then **torch 2.8.0 / torchvision 0.23.0 from `https://pypi.jetson-ai-lab.io/jp6/cu126`** (CUDA builds; PyPI torch has no Jetson CUDA), then `jetson/pip-vla-jetson.txt` = `lerobot[smolvla]==0.4.4` + the rest. `ur_rtde` and `moderngl` compile from source (no arm64 wheels). Asserts `torch.cuda.is_available()`. |
 | `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd`; the same install drops `vla_teleop` / `vla_eval` (manual start: `sudo supervisorctl start vla_teleop`, arguments in `~/VLA/config/teleop.env` / `eval.env`) |
 | `foxglove` | always an arm64 build; refuses to trust an x86 tarball |
@@ -124,7 +125,7 @@ overrides only what differs on JetPack 6.x (Ubuntu 22.04, aarch64):
 ```bash
 # flash with SDK Manager: JetPack 6.x + Jetson runtime components, user rd
 git clone https://github.com/r1b4z01d/rd_ws.git ~/rd_ws
-~/rd_ws/provision/jetson/provision_jetson.sh all        # preflight base jetson ros ... foxglove
+~/rd_ws/provision/jetson/provision_jetson.sh all        # preflight base jetson data ros ... foxglove
 sudo reboot
 # copy ~/VLA over (section 3), then
 SNAPSHOT=~/snapshot-20261008 ~/rd_ws/provision/jetson/provision_jetson.sh vla infer
@@ -246,16 +247,21 @@ machine with internet) and pass `FOXGLOVE_IMAGE_TAR=`.
 
 ## Disk layout on the Jetson (since 2026-10-26)
 
-The 64 GB eMMC is the system disk. `~/VLA` and `~/rd_ws` are symlinks to `/mnt/data/VLA` and
-`/mnt/data/rd_ws` on a 512 GB NVMe (ext4, label `data`, fstab entry with `nofail`). Everything in this
-kit and in the supervisor confs keeps using `/home/rd/...`, which resolves through the symlinks. Because
-the mount is `nofail`, supervisor is ordered after it by a drop-in; recreate both when re-provisioning a
-box that has the drive:
+The 64 GB eMMC is the system disk and was filling up, so a 512 GB NVMe (ext4, label `data`) is mounted
+at `/mnt/data` and `provision_jetson.sh data` keeps the big trees there behind symlinks:
 
-```bash
-sudo mkdir -p /mnt/data/VLA /mnt/data/rd_ws && sudo chown rd:rd /mnt/data/VLA /mnt/data/rd_ws
-ln -s /mnt/data/VLA ~/VLA && ln -s /mnt/data/rd_ws ~/rd_ws
-sudo mkdir -p /etc/systemd/system/supervisor.service.d
-printf '[Unit]\nRequiresMountsFor=/mnt/data\n' | sudo tee /etc/systemd/system/supervisor.service.d/nvme-data.conf
-sudo systemctl daemon-reload
-```
+| in the home | on the drive |
+|---|---|
+| `~/VLA` | `/mnt/data/VLA` |
+| `~/rd_ws` | `/mnt/data/rd_ws` |
+| `~/.cache/huggingface` (base VLM, LeRobot's Arrow copies) | `/mnt/data/cache/huggingface` |
+| `~/.cache/robot_descriptions` (robot meshes) | `/mnt/data/cache/robot_descriptions` |
+
+Everything in this kit, the supervisor confs, the venv shebangs and the workstation's rsync targets keep
+using `/home/rd/...`, which resolves through the links. The fstab entry is `nofail` (the robot boots
+without the drive), so the phase also installs `/etc/systemd/system/supervisor.service.d/nvme-data.conf`
+(`RequiresMountsFor=/mnt/data`): without it supervisor's autostart units would start into empty symlink
+targets. The phase is idempotent; on a box that already has the drive it only verifies. To migrate a
+live box, stop the units that run from the trees first (`vla_cameras`, `vla_camera_ros_bridge`,
+`robot_disco_*`), as the phase refuses to move a tree that is in use. `DATA_LABEL` / `DATA_MOUNT`
+override the defaults.
