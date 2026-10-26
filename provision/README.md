@@ -243,3 +243,19 @@ machine with internet) and pass `FOXGLOVE_IMAGE_TAR=`.
   manifests on purpose; the snapshot freezes are the authoritative versions.
 - The AmazingHand runs on its own host (`192.168.11.117` / `192.168.1.194`); nothing from
   `AmazingHand-main/` is installed on the robot PC.
+
+## Disk layout on the Jetson (since 2026-10-26)
+
+The 64 GB eMMC is the system disk. `~/VLA` and `~/rd_ws` are symlinks to `/mnt/data/VLA` and
+`/mnt/data/rd_ws` on a 512 GB NVMe (ext4, label `data`, fstab entry with `nofail`). Everything in this
+kit and in the supervisor confs keeps using `/home/rd/...`, which resolves through the symlinks. Because
+the mount is `nofail`, supervisor is ordered after it by a drop-in; recreate both when re-provisioning a
+box that has the drive:
+
+```bash
+sudo mkdir -p /mnt/data/VLA /mnt/data/rd_ws && sudo chown rd:rd /mnt/data/VLA /mnt/data/rd_ws
+ln -s /mnt/data/VLA ~/VLA && ln -s /mnt/data/rd_ws ~/rd_ws
+sudo mkdir -p /etc/systemd/system/supervisor.service.d
+printf '[Unit]\nRequiresMountsFor=/mnt/data\n' | sudo tee /etc/systemd/system/supervisor.service.d/nvme-data.conf
+sudo systemctl daemon-reload
+```
