@@ -1,4 +1,4 @@
-# Fetch-and-carry route: bookshelf (pick Tigger up with the VLA policy) -> banana bed (place him) -> on.
+# Fetch-and-carry route: bookshelf (grab Tigger with the VLA policy) -> banana bed (place him) -> on.
 #
 #   cd ~/rd_ws/Scripts && python3 path.py tigger_route.yaml      # then: ros2 service call /start_waypoints std_srvs/srv/Trigger {}
 #   python3 path.py --check tigger_route.yaml                     # dry parse: segments + the commands, no ROS
@@ -13,11 +13,11 @@ waypoints:
     position: {x: 2.539005, y: 1.435278, z: 0.0}          # = bookshelf_1 in new_waypoints.yaml
     orientation: {x: 0.0, y: 0.0, z: 0.994799, w: 0.101862}
     post_actions:
-      # pickup_tigger_smolvla_ft predates capture.json: it was recorded with NO square crop (the upright portrait
-      # scene/side frames fit-and-padded, centered, into 960x540). A backfilled capture.json (2026-10-26) now
-      # travels with the run, so the eval sets the cameras to that no-crop geometry before the first observation.
-      - vla: pickup_tigger_smolvla_ft          # training run under ~/VLA/outputs/train (run@step or a path also work)
-        task: "pick up tigger"                 # the task string the run was trained with
+      # The grab model. tigger_1_merged predates capture.json; it was recorded with scene/side square-cropped to
+      # the MIDDLE of the frame (540x540). A backfilled capture.json (squares 0.5/0.5, 2026-10-26) travels with
+      # the run, so the eval sets the cameras to that crop before the first observation.
+      - vla: tigger_1_merged_smolvla_1         # training run under ~/VLA/outputs/train (run@step or a path also work)
+        task: "Grab and hold tigger"           # the task string the run was trained with
         seconds: 90                            # cap on the playing phase
         still: 3                               # finish early after 3 s without motion…
         still_mode: fingers                    # …of the FINGERS, once they have moved (the grasp happened)
