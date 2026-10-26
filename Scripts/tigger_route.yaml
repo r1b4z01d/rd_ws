@@ -13,10 +13,9 @@ waypoints:
     position: {x: 2.539005, y: 1.435278, z: 0.0}          # = bookshelf_1 in new_waypoints.yaml
     orientation: {x: 0.0, y: 0.0, z: 0.994799, w: 0.101862}
     post_actions:
-      # CAVEAT (2026-10-26): pickup_tigger_smolvla_ft was trained on the OLD camera rig — 960x540 landscape frames,
-      # no rotation/crop (its dataset has no capture.json) — so on the current rig (sideways scene/side cameras,
-      # square crops) it will not see what it was trained on. Expect to re-record the pickup on this rig and
-      # retrain (as tigger_bed_1 was), then put that run name here.
+      # pickup_tigger_smolvla_ft predates capture.json: it was recorded with NO square crop (the upright portrait
+      # scene/side frames fit-and-padded, centered, into 960x540). A backfilled capture.json (2026-10-26) now
+      # travels with the run, so the eval sets the cameras to that no-crop geometry before the first observation.
       - vla: pickup_tigger_smolvla_ft          # training run under ~/VLA/outputs/train (run@step or a path also work)
         task: "pick up tigger"                 # the task string the run was trained with
         seconds: 90                            # cap on the playing phase
