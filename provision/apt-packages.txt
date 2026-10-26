@@ -1,0 +1,52 @@
+# System packages for the Robot Disco robot PC (Ubuntu 22.04). One per line, # comments allowed.
+# Installed by provision.sh phase "base". ROS packages live in ros-packages.txt.
+
+# --- build / dev tooling
+build-essential
+cmake
+git
+git-lfs
+curl
+wget
+rsync
+tmux
+htop
+vim
+python3-pip
+python3-venv
+python3-dev
+python3-tk
+python3-socks
+software-properties-common
+
+# --- services used by the supervisor units
+openssh-server
+supervisor
+# docker: installed by provision.sh phase base only when no docker is present (JetPack / Docker CE
+# images already ship one, and docker.io conflicts with containerd.io)
+
+# --- robot_face: audio out (aplay), espeak fallback voice, GL window
+alsa-utils
+espeak
+libglfw3
+libgl1-mesa-dri
+libegl1
+mesa-utils
+
+# --- 2.1 Bluetooth speaker (README "2.1 Bluetooth Audio")
+bluez
+pulseaudio-module-bluetooth
+
+# --- cameras / USB devices
+v4l-utils
+libusb-1.0-0
+libhidapi-hidraw0
+libhidapi-libusb0
+usbutils
+ffmpeg
+
+# --- networking / time
+net-tools
+iproute2
+ethtool
+chrony

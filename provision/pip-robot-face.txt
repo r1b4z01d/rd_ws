@@ -1,0 +1,15 @@
+# Python deps for src/robot_face on the robot PC, installed into the SYSTEM python (the one that has
+# rclpy) with `pip3 install --user`. Keep in sync with the imports in src/robot_face/src/robot_face/.
+# OpenCV >= 4.8 is required by the YuNet 2023 face model; Ubuntu 22.04's python3-opencv is 4.5, so the
+# pip wheel is installed on top and shadows it. Coqui TTS is optional and lives in pip-robot-face-tts.txt.
+numpy<2
+opencv-python>=4.8
+# <1: mediapipe 1.x removed the legacy `mp.solutions` (Pose/Hands) API the node uses. 0.10.18 is the
+# newest 0.10.x with cp310 wheels for both x86_64 and aarch64 (Jetson), verified 2026-10-10.
+mediapipe<1
+moderngl
+glfw
+# ur_rtde: for robot_disco's ur_joint_state_publisher.py (read-only RTDE poll of the UR5e joints into
+# /joint_states so the arm moves in Foxglove during evals). No arm64 wheel: builds from source
+# (libboost-all-dev + cmake, both in the Jetson apt list), several minutes.
+ur_rtde

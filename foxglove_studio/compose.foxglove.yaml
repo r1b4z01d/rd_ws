@@ -7,7 +7,7 @@ services:
     ports:
       - 80:8080
     volumes:
-      - ./foxglove_layout.json:/foxglove/default-layout.json
+      - ./foxglove-layout.json:/foxglove/default-layout.json:ro
     environment:
       - DS_TYPE=foxglove-websocket
       - DS_PORT=8765

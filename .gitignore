@@ -41,3 +41,6 @@ install/
 build/
 log/
 __pycache__
+
+# foxglove_studio/packages/log is a yarn workspace (@foxglove/log), not a log directory
+!foxglove_studio/packages/log/

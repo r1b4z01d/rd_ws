@@ -1,0 +1,34 @@
+waypoints:
+  - name: bookshelf_2
+    position: {x: 0.167284, y: 1.444961, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.612016, w: 0.790845}
+  - name: backdoor
+    position: {x: 1.587509, y: 1.639919, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.110906, w: 0.993831}
+  - name: bookshelf_1
+    position: {x: 2.539005, y: 1.435278, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.101862, w: 0.994799}
+  - name: livingroom_entrance
+    position: {x: 3.817650, y: 0.556675, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.072021, w: 0.997403}
+  - name: dining_room
+    position: {x: 5.525370, y: -0.127685, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.128541, w: 0.991704}
+  - name: kitchen_doorway
+    position: {x: 6.601507, y: -0.846276, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.791526, w: 0.611135}
+  - name: workshop_doorway
+    position: {x: 5.961281, y: -2.722281, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.751507, w: 0.659725}
+  - name: tool_chest
+    position: {x: 5.421819, y: -4.086625, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.752343, w: 0.658772}
+  - name: parts_chest
+    position: {x: 5.175754, y: -6.090080, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.752649, w: 0.658422}
+  - name: charger_exit_enter
+    position: {x: 6.397198, y: -6.872006, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.767208, w: 0.641398}
+  - name: charger
+    position: {x: 6.171422, y: -7.756816, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.803492, w: 0.595315}

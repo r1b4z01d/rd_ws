@@ -1,0 +1,11 @@
+# Static address on the isolated robot subnet (no gateway, no DNS: the subnet has no internet).
+# provision.sh phase "network" substitutes __IFACE__ with NET_IFACE and installs this as
+# /etc/netplan/01-robot-disco.yaml. Peers: UR5e .21, AmazingHand ESP32 .117, GPU box .130.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    __IFACE__:
+      dhcp4: false
+      addresses:
+        - 192.168.11.80/24

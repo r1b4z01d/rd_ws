@@ -1,6 +1,7 @@
 combined_face_hand:
   ros__parameters:
     image_topic: "/camera/camera/color/image_raw"
+    face_only: false          # true = eyes only; disables all hand tracking + joint streaming
     hand_in_eyes: true
     mirror: true
     width: 1280
@@ -21,5 +22,49 @@ combined_face_hand:
     blink_closed_hold: 0.05
     gaze_speed: 0.3
     gaze_idle_speed: 0.01
+    # Mouth waveform (drawn below the eyes; animates with speech loudness)
+    mouth_enabled: true
+    mouth_level_topic: "~/mouth_level"   # std_msgs/Float32, loudness 0..1
+    mouth_audio_topic: "~/mouth_audio"   # std_msgs/Float32MultiArray, samples -1..1
+    mouth_gap: 550.0          # eye bottom edge → waveform centre line (px)
+    mouth_amplitude: 70.0     # peak displacement at full loudness (px)
+    mouth_width: 0.0          # waveform width in px (0 = span between eye centres)
+    mouth_gain: 1.0           # multiplier applied to incoming level / samples
+    mouth_attack: 0.6         # per-frame smoothing when getting louder (0.01–1.0)
+    mouth_release: 0.12       # per-frame smoothing when getting quieter (0.01–1.0)
+    mouth_timeout: 0.4        # seconds without input before the mouth goes idle
+    mouth_smile: 25.0         # resting upward curl of the mouth ends (px)
+    mouth_smile_happy: 70.0   # curl while a person is in view (px)
+    mouth_gestures: true      # random hums / grins / smirks while nobody is around
+    mouth_gesture_min_interval: 4.0    # seconds between idle gestures (min)
+    mouth_gesture_max_interval: 12.0   # seconds between idle gestures (max)
+    # Greeting (spoken via TTS when a new person appears)
+    greeting_enabled: true
+    greeting_text: "hello"                 # for strangers / unnamed people
+    greeting_known_text: "hello {name}"    # for people you have named
+    greeting_late_text: "oh, hi {name}"    # follow-up if the name is recognised after the generic hello
+    greeting_wait: 2.0                     # seconds to wait for face ID before greeting generically
+    greeting_name_window: 10.0             # seconds after a generic hello to still add the name
+    greeting_happy_seconds: 30.0
+    speech_lead_silence: 1.5               # seconds of lead-in before each utterance (Bluetooth wake-up)
+    speech_lead_level: 0.01                # lead-in is a faint 50 Hz tone at this level (0 = pure silence)
+    # Text-to-speech engine: auto = Kokoro-82M if installed, else Coqui, else espeak
+    tts_engine: "auto"                     # auto | kokoro | coqui | espeak
+    tts_voice: "af_heart"                  # Kokoro voice (af_*/am_* American, bf_*/bm_* British)
+    tts_speed: 1.0
+    tts_lang: "auto"                       # auto = from the voice prefix (a/b English, e Spanish, f French, ...)
+    kokoro_python: "~/.robot_face/kokoro-venv/bin/python"   # venv with kokoro-onnx (see provision/setup_kokoro.sh)
+    kokoro_model_dir: "~/.robot_face/kokoro"                # kokoro-v1.0.onnx + voices-v1.0.bin
+    # Face identification (learns to tell people apart; OpenCV YuNet + SFace)
+    face_id_enabled: true
+    face_id_models_dir: ""                 # "" = share/robot_face/models
+    face_id_gallery: "~/.robot_face/people.json"
+    face_id_interval: 3                    # run face ID every N camera frames
+    face_id_match_threshold: 0.363         # cosine similarity; higher = stricter
+    face_id_auto_enroll: true              # learn strangers automatically as person_N
+    face_id_min_face_px: 40                # ignore faces narrower than this (px)
+    face_id_unknown_threshold: 0.28        # below this vs everyone known = a stranger; between = unsure
+    face_id_enroll_min_face_px: 64         # only learn new people when the face is at least this wide
+    face_id_enroll_frames: 6               # consistent passes needed before enrolling a stranger
     save_raw_video: "/tmp/raw_camera.mp4"      # set to null or "" to disable
     save_video: "/tmp/combined_output.mp4"     # set to null or "" to disable

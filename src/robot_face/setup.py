@@ -12,8 +12,19 @@ setup(
         ("share/" + package_name, ["package.xml", "README.md"]),
         ("share/" + package_name + "/launch", ["launch/combined_face_hand.launch.py"]),
         ("share/" + package_name + "/config", ["config/combined_face_hand_defaults.yaml"]),
+        (
+            "share/" + package_name + "/models",
+            [
+                "models/face_detection_yunet_2023mar.onnx",
+                "models/face_recognition_sface_2021dec.onnx",
+                "models/README.md",
+            ],
+        ),
     ],
-    install_requires=["setuptools", "numpy", "opencv-python", "mediapipe", "moderngl", "glfw"],
+    # Runtime deps come from package.xml / system packages; listing pip names here makes
+    # pkg_resources raise DistributionNotFound (e.g. inside TTS import) when OpenCV is
+    # installed as python3-opencv instead of the pip "opencv-python" wheel.
+    install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Bryan Ribas",
     maintainer_email="bryanribas@gmail.com",

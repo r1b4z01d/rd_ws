@@ -1,0 +1,26 @@
+# VLA venv on the Jetson Orin (JetPack 6.x, Python 3.10, aarch64). torch/torchvision come from NVIDIA's
+# Jetson AI Lab index in provision_jetson.sh (CUDA builds; PyPI has no CUDA torch for Jetson). Pins must
+# stay inside lerobot 0.4.4's ranges (torch>=2.2.1,<2.11 ; torchvision>=0.21,<0.26); torch 2.8.0 is the
+# newest build on that index that needs only cuSPARSELt (2.9+ also want cuDSS).
+# Everything else is ../pip-vla.txt plus the smolvla extra, since the point of the Jetson is to serve
+# SmolVLA locally (scripts/infer_server.py).
+lerobot[smolvla]==0.4.4
+ur_rtde
+# hidapi, NOT the `hid` package: both import as `hid`, but teleop/spacemouse.py uses hidapi's
+# hid.device() API (the `hid` package only has hid.Device and breaks it)
+hidapi
+evdev
+# same upper bound as lerobot's opencv-python-headless pin, so the two cv2 installs agree
+opencv-python<4.13
+# numpy is NOT pinned here on purpose: lerobot's rerun-sdk declares numpy>=2 so "numpy<2" makes pip's
+# resolver give up, yet NVIDIA's torch wheel needs numpy 1.x at runtime. provision_jetson.sh installs
+# numpy<2 as a post-step after this file (see vla_pip_install there).
+scipy
+pandas
+pyarrow
+pillow
+mujoco
+mink
+robot_descriptions
+# Elgato Stream Deck (teleop/streamdeck.py, eval_hw buttons); pure python, needs libhidapi-hidraw0 (apt list)
+streamdeck

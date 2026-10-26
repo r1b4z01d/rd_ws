@@ -1,0 +1,58 @@
+# ROS 2 Humble apt packages for the Robot Disco robot PC. Installed by provision.sh phase "ros".
+# Derived from src/robot_disco/launch/*, src/robot_disco/config/*, src/robot_face and services/*.conf.
+# Anything the source-built submodules need on top of this is pulled in by rosdep in phase "workspace".
+
+# core + build tools
+ros-humble-ros-base
+ros-dev-tools
+python3-colcon-common-extensions
+python3-rosdep
+python3-vcstool
+
+# robot description / TF / control (launch_robot.launch.py, rsp.launch.py, my_controllers.yaml)
+ros-humble-xacro
+ros-humble-robot-state-publisher
+ros-humble-joint-state-publisher
+ros-humble-tf2-ros
+ros-humble-tf2-tools
+ros-humble-ros2-control
+ros-humble-ros2-controllers
+ros-humble-controller-manager
+ros-humble-diff-drive-controller
+ros-humble-joint-state-broadcaster
+ros-humble-hardware-interface
+ros-humble-twist-mux
+ros-humble-joy
+ros-humble-teleop-twist-joy
+
+# sensors (realsense_launch.py, rplidar_*_launch.py, velodyne.launch.py, *_filter_launch.py)
+ros-humble-realsense2-camera
+ros-humble-realsense2-description
+ros-humble-laser-filters
+ros-humble-diagnostic-updater
+ros-humble-pcl-ros
+ros-humble-pcl-conversions
+ros-humble-image-transport
+ros-humble-image-transport-plugins
+ros-humble-cv-bridge
+ros-humble-vision-opencv
+
+# navigation (localization_launch.py, navigation_launch.py, online_async_launch.py, collision monitor service)
+ros-humble-navigation2
+ros-humble-nav2-bringup
+ros-humble-nav2-simple-commander
+ros-humble-slam-toolbox
+
+# UR5e arm (ur5e.launch.py, Scripts/*.py, documents/notes.txt)
+ros-humble-ur
+
+# apriltag (apriltag_relocalization_launch.py; apriltag + apriltag_ros themselves build from src/)
+ros-humble-apriltag-msgs
+
+# foxglove bridge: NOT from apt. The apt package (3.x, Rust rewrite) only speaks foxglove.sdk.v1; the
+# vendored Studio 1.87 in foxglove_studio/ speaks foxglove.websocket.v1 ("handshake failed" in the
+# bridge log). src/foxglove_bridge is the last C++ release (0.8.5) and overlays it.
+
+# misc used by scripts / docs
+ros-humble-rosbag2
+ros-humble-rqt-common-plugins

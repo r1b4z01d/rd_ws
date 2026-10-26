@@ -1,0 +1,5 @@
+# Optional: Coqui TTS voice for the robot_face greeting (`TTS("tts_models/en/ljspeech/vits")`).
+# Pulls in torch (~2 GB). Without it the node falls back to espeak automatically.
+# The model itself is downloaded on first use and cached in ~/.local/share/tts/; the robot subnet has no
+# internet, so copy the cache from a machine that has run it once (capture_rd_state.sh saves it).
+TTS

@@ -77,7 +77,7 @@
         "poseEstimateThetaDeviation": 0.26179939
       },
       "imageMode": {
-        "imageTopic": "/camera/camera/color/image_raw",
+        "imageTopic": "/camera/camera/color/image_raw/compressed",
         "calibrationTopic": "/camera/camera/color/camera_info"
       }
     },
@@ -247,7 +247,7 @@
           ],
           "lineWidth": 0.2015
         },
-        "/camera/camera/color/image_raw": {
+        "/camera/camera/color/image_raw/compressed": {
           "visible": false,
           "frameLocked": true,
           "cameraInfoTopic": "/camera/camera/color/camera_info",

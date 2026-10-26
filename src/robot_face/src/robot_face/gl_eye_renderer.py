@@ -36,6 +36,19 @@ uniform float u_time;
 uniform sampler2D u_hand_tex;       // hand skeleton panel (RGB, black background)
 uniform float u_hand_panel_frac;    // fraction of screen height used for panel (0 = hidden)
 
+// --- mouth waveform ---
+uniform vec2  u_mouth_center;   // waveform centre in pixel coords (Y=down)
+uniform float u_mouth_hw;       // half-width of the waveform (pixels)
+uniform float u_mouth_amp;      // peak vertical displacement at level 1.0 (pixels)
+uniform float u_mouth_level;    // 0 = silent (flat line) .. 1 = full loudness
+uniform int   u_mouth_mode;     // 0 = hidden, 1 = procedural from level, 2 = sampled audio
+uniform float u_mouth_smile;    // upward curl of the ends in pixels (negative = frown)
+uniform float u_mouth_skew;     // asymmetry in pixels: right end up / left end down
+uniform sampler2D u_mouth_tex;  // Nx1 R32F audio samples in [-1, 1]
+uniform float u_mouth_shape;    // 0 = resting curve / waveform, 1 = polyline shape below
+uniform int   u_mouth_path_n;   // number of valid points in u_mouth_path
+uniform sampler2D u_mouth_path; // Kx1 RG32F polyline points (pixels, relative to mouth centre)
+
 out vec4 frag_color;
 
 // --- palette (linear RGB) ---
@@ -43,6 +56,8 @@ const vec3 C_BASE = vec3(0.15, 0.03, 0.30);   // dark purple fill
 const vec3 C_LINE = vec3(0.80, 0.20, 1.00);   // bright electric-purple scanlines
 const vec3 C_GLOW = vec3(0.85, 0.25, 1.00);   // bloom / outer glow
 const vec3 C_RIM  = vec3(0.90, 0.65, 1.00);   // bright lavender rim highlight
+const vec3 C_MOUTH_CORE = vec3(0.95, 0.80, 1.00);   // waveform line
+const vec3 C_MOUTH_GLOW = vec3(0.85, 0.25, 1.00);   // waveform halo
 
 // Rounded-rectangle signed distance field (negative = inside)
 float sdRoundRect(vec2 p, vec2 half_size, float r) {
@@ -50,31 +65,32 @@ float sdRoundRect(vec2 p, vec2 half_size, float r) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// Right-angle triangle corner cuts.
-// Each returns 1.0 if fragment p (in local eye coords) falls inside the cut.
+// Right-angle triangle corner cuts (eyelids for the moods).
+// Each returns the SIGNED DISTANCE in pixels to the cut's diagonal edge: positive inside the
+// cut-away triangle, negative on the kept side. renderEye folds it into the eye's own SDF with
+// max(), so the lid line becomes part of the eye edge and the fill, the outer glow and the rim all
+// stop there. (A 0/1 step here only masked the fill: the glow was still computed from the uncut
+// rectangle, so a squinting eye kept showing its full square in glow colour.)
 // hs  = eye half-size (hw, hh)
 // cs  = cut size (width, height) measured inward from that corner
 float cutTL(vec2 p, vec2 hs, vec2 cs) {          // top-left
     vec2 d = p - vec2(-hs.x, -hs.y);
-    if (d.x < 0.0 || d.y < 0.0) return 0.0;
-    return step(d.x / cs.x + d.y / cs.y, 1.0);
+    return (1.0 - (d.x / cs.x + d.y / cs.y)) / length(1.0 / cs);
 }
 float cutTR(vec2 p, vec2 hs, vec2 cs) {          // top-right
     vec2 d = p - vec2( hs.x, -hs.y);
-    if (d.x > 0.0 || d.y < 0.0) return 0.0;
-    return step(-d.x / cs.x + d.y / cs.y, 1.0);
+    return (1.0 - (-d.x / cs.x + d.y / cs.y)) / length(1.0 / cs);
 }
 float cutBL(vec2 p, vec2 hs, vec2 cs) {          // bottom-left
     vec2 d = p - vec2(-hs.x,  hs.y);
-    if (d.x < 0.0 || d.y > 0.0) return 0.0;
-    return step(d.x / cs.x - d.y / cs.y, 1.0);
+    return (1.0 - (d.x / cs.x - d.y / cs.y)) / length(1.0 / cs);
 }
 float cutBR(vec2 p, vec2 hs, vec2 cs) {          // bottom-right
     vec2 d = p - vec2( hs.x,  hs.y);
-    if (d.x > 0.0 || d.y > 0.0) return 0.0;
-    return step(-d.x / cs.x - d.y / cs.y, 1.0);
+    return (1.0 - (-d.x / cs.x - d.y / cs.y)) / length(1.0 / cs);
 }
 
+// Signed distance (px) to the current mood's eyelid cuts; positive = cut away.
 float moodMask(vec2 p, vec2 hs, int mood) {
     vec2 ew = hs * 2.0;
     if (mood == 1) {                                       // TIRED — shallow top-outer
@@ -94,7 +110,7 @@ float moodMask(vec2 p, vec2 hs, int mood) {
             max(cutBL(p, hs, cb), cutBR(p, hs, cb))
         );
     }
-    return 0.0;
+    return -1.0e5;                                         // neutral: no cut anywhere
 }
 
 vec3 renderEye(vec2 frag, vec2 center) {
@@ -107,12 +123,10 @@ vec3 renderEye(vec2 frag, vec2 center) {
     // Local coords: center of eye = origin, gaze shifts the pattern
     vec2 p = frag - center - u_gaze;
 
-    float sdf    = sdRoundRect(p, hs, corner_r);
+    // Eye shape = rounded rect with the mood's eyelid cuts folded into the same signed distance,
+    // so everything below (fill, glow, rim) sees the squinted outline, not the full rectangle.
+    float sdf    = max(sdRoundRect(p, hs, corner_r), moodMask(p, hs, u_mood));
     float inside = smoothstep(1.5, -1.5, sdf);           // 1 inside, 0 outside
-
-    // Mood: zero out inside mask where corners are cut
-    float cut    = moodMask(p, hs, u_mood);
-    inside      *= (1.0 - cut);
 
     // --- wavy horizontal scanlines ---
     // Primary wave: horizontal with lateral sine displacement
@@ -139,11 +153,84 @@ vec3 renderEye(vec2 frag, vec2 center) {
     return col;
 }
 
+// Waveform height (pixels, Y=down) at horizontal offset x from the mouth centre.
+float mouthWave(float x) {
+    float nx  = x / u_mouth_hw;                          // -1 .. 1 across the mouth
+    float lvl = clamp(u_mouth_level, 0.0, 1.0);
+    float y;
+    if (u_mouth_mode == 2) {
+        y = texture(u_mouth_tex, vec2(nx * 0.5 + 0.5, 0.5)).r;
+    } else {
+        // Three travelling sines: a slow carrier plus two faster harmonics.
+        float t = u_time;
+        y = sin(x * 0.045 + t * 9.0)  * 0.55
+          + sin(x * 0.110 - t * 13.0) * 0.30
+          + sin(x * 0.023 + t * 5.0)  * 0.15;
+        y *= lvl;                                        // perfectly still when silent
+    }
+    // Window: full amplitude in the middle, pinched to a flat line at both ends.
+    float win = 1.0 - smoothstep(0.45, 1.0, abs(nx));
+    win *= 0.55 + 0.45 * (1.0 - nx * nx);
+    // Resting shape: a parabola whose ends curl up by u_mouth_smile (Y is down,
+    // so negative = up), plus a linear tilt for smirks.
+    float rest = -u_mouth_smile * nx * nx + u_mouth_skew * nx;
+    return rest + y * u_mouth_amp * win;
+}
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// Distance from p to the polyline stored in u_mouth_path
+float mouthPathDist(vec2 p) {
+    float d = 1e9;
+    for (int i = 0; i < u_mouth_path_n - 1; i++) {
+        vec2 a = texelFetch(u_mouth_path, ivec2(i, 0), 0).xy;
+        vec2 b = texelFetch(u_mouth_path, ivec2(i + 1, 0), 0).xy;
+        d = min(d, sdSegment(p, a, b));
+    }
+    return d;
+}
+
+vec3 renderMouth(vec2 frag) {
+    if (u_mouth_mode == 0) return vec3(0.0);             // uniform branch: safe for dFdx below
+
+    vec2  p  = frag - u_mouth_center;
+    float nx = p.x / u_mouth_hw;
+
+    float wy    = mouthWave(p.x);
+    float dv    = abs(p.y - wy);                          // plain vertical distance
+    // Divide by the local slope so steep sections keep the same stroke thickness.
+    // Only valid close to the curve, so it is used for the core stroke alone.
+    float slope = dFdx(wy);
+    float d     = dv / sqrt(1.0 + slope * slope);
+
+    if (abs(nx) > 1.25) return vec3(0.0);
+
+    // Morph toward an arbitrary shape (gestures) by blending distance fields
+    if (u_mouth_shape > 0.001 && u_mouth_path_n > 1) {
+        float dp = mouthPathDist(p);
+        d  = mix(d,  dp, u_mouth_shape);
+        dv = mix(dv, dp, u_mouth_shape);
+    }
+
+    float lvl   = clamp(u_mouth_level, 0.0, 1.0);
+    float ends  = 1.0 - smoothstep(0.90, 1.08, abs(nx));
+    float width = 1.6 + 1.4 * lvl;                        // stroke thickens as it gets louder
+    float core  = smoothstep(width + 1.2, width - 0.6, d);
+    float glow  = exp(-dv * 0.10) * (0.35 + 0.65 * lvl);
+
+    return (C_MOUTH_CORE * core + C_MOUTH_GLOW * glow * 0.8) * ends;
+}
+
 void main() {
     // OpenGL origin is bottom-left; flip Y to match our top-left pixel layout
     vec2 frag = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
 
     vec3 col = renderEye(frag, u_eye_left) + renderEye(frag, u_eye_right);
+    col += renderMouth(frag);
 
     // Hand skeleton panel — bottom u_hand_panel_frac of the screen
     if (u_hand_panel_frac > 0.01) {
@@ -167,6 +254,32 @@ void main() {
 """
 
 
+def _resample_polyline(pts: np.ndarray, n: int) -> np.ndarray:
+    """Resample an (M, 2) polyline to n points evenly spaced along its length."""
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    if s[-1] <= 0.0:
+        return np.repeat(pts[:1], n, axis=0)
+    u = np.linspace(0.0, s[-1], n)
+    return np.column_stack([np.interp(u, s, pts[:, 0]), np.interp(u, s, pts[:, 1])]).astype(np.float32)
+
+
+def morph_from_rest(shape: np.ndarray, blend: float, smile_norm: float, skew_norm: float,
+                    n: int = 96) -> np.ndarray:
+    """Geometric morph between the resting mouth curve and a gesture ``shape``.
+
+    Both are expressed in normalised units (x in half-widths, y in amplitudes).
+    The resting curve is the same parabola/tilt the shader draws, so at
+    ``blend`` = 0 the polyline coincides with the normal mouth and at 1 it is
+    the gesture shape. Intermediate frames bend one into the other.
+    """
+    xs = np.linspace(-1.0, 1.0, n, dtype=np.float32)
+    rest = np.column_stack([xs, -smile_norm * xs * xs + skew_norm * xs]).astype(np.float32)
+    target = _resample_polyline(np.asarray(shape, dtype=np.float32).reshape(-1, 2), n)
+    b = float(min(max(blend, 0.0), 1.0))
+    return (rest * (1.0 - b) + target * b).astype(np.float32)
+
+
 class GlEyeRenderer:
     """
     Renders animated robot eyes via a GLSL fragment shader.
@@ -188,6 +301,12 @@ class GlEyeRenderer:
         eye_side_margin: float = 80.0,  # canvas edge → eye centre (pixels)
         eye_top_margin: float = 80.0,   # canvas top  → eye centre (pixels)
         hand_panel_frac: float = 0.0,   # fraction of screen height for hand panel (0 = off)
+        mouth_enabled: bool = True,     # draw the mouth waveform below the eyes
+        mouth_gap: float = 150.0,       # eye bottom edge → waveform centre line (pixels)
+        mouth_hw: float | None = None,  # waveform half-width (None = span between eye centres)
+        mouth_amp: float = 70.0,        # peak displacement at level 1.0 (pixels)
+        mouth_samples: int = 512,       # resolution of the sampled-audio texture
+        mouth_path_points: int = 128,   # max points in a gesture shape polyline
     ):
         if not glfw.init():
             raise RuntimeError("glfw.init() failed")
@@ -235,7 +354,71 @@ class GlEyeRenderer:
         self._prog["u_hand_panel_frac"].value = float(hand_panel_frac)
         self._panel_size = (width, panel_h)
 
+        # Mouth waveform layout + sample texture (texture unit 1)
+        self._mouth_enabled = bool(mouth_enabled)
+        mouth_cy = eye_cy + eye_hh + mouth_gap
+        mouth_cx = width / 2.0
+        if mouth_hw is None:
+            mouth_hw = (right_cx - left_cx) / 2.0
+        self._mouth_n = max(2, int(mouth_samples))
+        self._mouth_tex = self._ctx.texture((self._mouth_n, 1), 1, dtype="f4")
+        self._mouth_tex.filter   = (moderngl.LINEAR, moderngl.LINEAR)
+        self._mouth_tex.repeat_x = False
+        self._mouth_tex.repeat_y = False
+        self._mouth_tex.write(np.zeros(self._mouth_n, dtype="f4").tobytes())
+        self._mouth_tex.use(location=1)
+        self._prog["u_mouth_tex"].value    = 1
+        self._prog["u_mouth_center"].value = (float(mouth_cx), float(mouth_cy))
+        self._prog["u_mouth_hw"].value     = float(max(mouth_hw, 1.0))
+        self._prog["u_mouth_amp"].value    = float(mouth_amp)
+        self._prog["u_mouth_level"].value  = 0.0
+        self._prog["u_mouth_smile"].value  = 0.0
+        self._prog["u_mouth_skew"].value   = 0.0
+        self._prog["u_mouth_mode"].value   = 1 if self._mouth_enabled else 0
+        self._mouth_hw  = float(max(mouth_hw, 1.0))
+        self._mouth_amp = float(mouth_amp)
+
+        # Gesture shape polyline texture (texture unit 2)
+        self._path_k = max(2, int(mouth_path_points))
+        self._path_tex = self._ctx.texture((self._path_k, 1), 2, dtype="f4")
+        self._path_tex.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self._path_tex.write(np.zeros(self._path_k * 2, dtype="f4").tobytes())
+        self._path_tex.use(location=2)
+        self._prog["u_mouth_path"].value   = 2
+        self._prog["u_mouth_path_n"].value = 0
+        self._prog["u_mouth_shape"].value  = 0.0
+
         self._t = 0.0
+
+    # ------------------------------------------------------------------
+    def set_mouth_path(self, points: np.ndarray) -> None:
+        """Upload a gesture shape as an (N, 2) polyline in normalised units:
+        x in mouth half-widths (-1..1), y in waveform amplitudes (down = +)."""
+        pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+        n = pts.shape[0]
+        if n > self._path_k:                                   # too dense: subsample evenly
+            idx = np.linspace(0, n - 1, self._path_k).round().astype(int)
+            pts = pts[idx]
+            n = pts.shape[0]
+        buf = np.zeros((self._path_k, 2), dtype=np.float32)
+        buf[:n, 0] = pts[:, 0] * self._mouth_hw
+        buf[:n, 1] = pts[:, 1] * self._mouth_amp
+        self._path_tex.write(buf.tobytes())
+        self._prog["u_mouth_path_n"].value = int(n)
+
+    # ------------------------------------------------------------------
+    def update_mouth_samples(self, samples: np.ndarray) -> None:
+        """Upload a 1-D array of audio samples in [-1, 1] as the mouth waveform.
+        The array is resampled to the texture width if its length differs."""
+        data = np.asarray(samples, dtype=np.float32).ravel()
+        if data.size == 0:
+            data = np.zeros(self._mouth_n, dtype=np.float32)
+        elif data.size != self._mouth_n:
+            src = np.linspace(0.0, 1.0, data.size, dtype=np.float32)
+            dst = np.linspace(0.0, 1.0, self._mouth_n, dtype=np.float32)
+            data = np.interp(dst, src, data).astype(np.float32)
+        np.clip(data, -1.0, 1.0, out=data)
+        self._mouth_tex.write(np.ascontiguousarray(data).tobytes())
 
     # ------------------------------------------------------------------
     def update_hand_panel(self, img_bgr: np.ndarray | None) -> None:
@@ -258,8 +441,23 @@ class GlEyeRenderer:
         gaze_offset: tuple[float, float],
         mood: int,
         dt: float = 0.033,
+        mouth_level: float = 0.0,
+        mouth_samples: np.ndarray | None = None,
+        mouth_smile: float = 0.0,
+        mouth_skew: float = 0.0,
+        mouth_shape: float = 0.0,
+        mouth_path: np.ndarray | None = None,
     ) -> None:
-        """Render one frame.  Call from your ROS image callback."""
+        """Render one frame.  Call from your ROS image callback.
+
+        ``mouth_level`` (0..1) drives the waveform amplitude and glow. When
+        ``mouth_samples`` is given (1-D array in [-1, 1]) the waveform traces
+        those samples; otherwise a procedural wave is synthesised from the level.
+        ``mouth_smile`` curls the ends of the mouth up by that many pixels
+        (negative for a frown) and ``mouth_skew`` tilts it for a smirk.
+        ``mouth_path`` is an optional (N, 2) normalised polyline (see
+        ``set_mouth_path``) and ``mouth_shape`` (0..1) morphs the mouth into it.
+        """
         if glfw.window_should_close(self._window):
             return
 
@@ -267,6 +465,33 @@ class GlEyeRenderer:
         self._t += dt
 
         self._ctx.clear(0.0, 0.0, 0.0, 1.0)
+
+        if not self._mouth_enabled:
+            mouth_mode = 0
+        elif mouth_samples is not None:
+            self.update_mouth_samples(mouth_samples)
+            mouth_mode = 2
+        else:
+            mouth_mode = 1
+        self._prog["u_mouth_mode"].value  = mouth_mode
+        self._prog["u_mouth_level"].value = float(min(max(mouth_level, 0.0), 1.0))
+        self._prog["u_mouth_smile"].value = float(mouth_smile)
+        self._prog["u_mouth_skew"].value  = float(mouth_skew)
+        if mouth_path is not None and mouth_shape > 0.0:
+            b = float(min(max(mouth_shape, 0.0), 1.0))
+            if b >= 0.999:
+                pts = mouth_path                                  # exact shape (sharp corners)
+            else:
+                pts = morph_from_rest(
+                    mouth_path, b,
+                    smile_norm=float(mouth_smile) / self._mouth_amp,
+                    skew_norm=float(mouth_skew) / self._mouth_amp,
+                )
+            self.set_mouth_path(pts)
+            # The polyline already encodes the morph, so draw it fully
+            self._prog["u_mouth_shape"].value = 1.0
+        else:
+            self._prog["u_mouth_shape"].value = 0.0
 
         self._prog["u_blink"].value = float(blink)
         # Flip gaze Y: OpenCV Y is down, OpenGL Y is up — we already flipped in shader,
@@ -284,6 +509,9 @@ class GlEyeRenderer:
 
     # ------------------------------------------------------------------
     def destroy(self) -> None:
+        self._path_tex.release()
+        self._mouth_tex.release()
+        self._hand_tex.release()
         self._vao.release()
         self._vbo.release()
         self._prog.release()
@@ -291,4 +519,4 @@ class GlEyeRenderer:
         glfw.terminate()
 
 
-__all__ = ["GlEyeRenderer"]
+__all__ = ["GlEyeRenderer", "morph_from_rest"]

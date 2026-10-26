@@ -34,3 +34,10 @@
 [submodule "AmazingHand-main"]
 	path = AmazingHand-main
 	url = git@github.com:r1b4z01d/AmazingHand.git
+[submodule "rplidar_ros"]
+	path = src/rplidar_ros
+	url = https://github.com/Slamtec/rplidar_ros.git
+	branch = ros2
+[submodule "src/foxglove_bridge"]
+	path = src/foxglove_bridge
+	url = https://github.com/foxglove/ros-foxglove-bridge.git

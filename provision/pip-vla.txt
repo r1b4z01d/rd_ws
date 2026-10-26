@@ -1,0 +1,21 @@
+# Fallback dependency list for the VLA project venv on the robot PC (~/VLA/.venv, Python 3.10).
+# Prefer the exact freeze captured from a working robot PC (snapshot/vla-venv-freeze.txt) — provision.sh
+# uses that automatically when present. This list is derived from imports in VLA/ur5e_lerobot and
+# VLA/scripts and from VLA/wiki/Machines-and-Network.md (lerobot 0.4.4 on both the GPU box and RD).
+lerobot==0.4.4
+ur_rtde
+# hidapi, NOT the `hid` package: both import as `hid`, but teleop/spacemouse.py uses hidapi's
+# hid.device() API (the `hid` package only has hid.Device and breaks it)
+hidapi
+evdev
+opencv-python
+numpy<2
+scipy
+pandas
+pyarrow
+pillow
+mujoco
+mink
+robot_descriptions
+# Elgato Stream Deck (teleop/streamdeck.py, eval_hw buttons); pure python, needs libhidapi-hidraw0 (apt list)
+streamdeck
