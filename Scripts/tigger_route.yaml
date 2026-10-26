@@ -1,0 +1,41 @@
+# Fetch-and-carry route: bookshelf (pick Tigger up with the VLA policy) -> banana bed (place him) -> on.
+#
+#   cd ~/rd_ws/Scripts && python3 path.py tigger_route.yaml      # then: ros2 service call /start_waypoints std_srvs/srv/Trigger {}
+#   python3 path.py --check tigger_route.yaml                     # dry parse: segments + the commands, no ROS
+#
+# Before starting: the arm at its home/transport pose (~/VLA/outputs/home_pose.json), the UR pendant in
+# Remote Control, vla_cameras running. Nothing else is needed: each `vla:` action stops the recording
+# panel if it is up, switches the inference server to its model (a ~30 s restart only when the model
+# changes), runs the policy unattended, and returns the arm home before the robot drives on.
+# Poses are map-frame; re-record after a new map (drive there, `ros2 topic echo /amcl_pose --once`).
+waypoints:
+  - name: bookshelf
+    position: {x: 2.539005, y: 1.435278, z: 0.0}          # = bookshelf_1 in new_waypoints.yaml
+    orientation: {x: 0.0, y: 0.0, z: 0.994799, w: 0.101862}
+    post_actions:
+      # CAVEAT (2026-10-26): pickup_tigger_smolvla_ft was trained on the OLD camera rig — 960x540 landscape frames,
+      # no rotation/crop (its dataset has no capture.json) — so on the current rig (sideways scene/side cameras,
+      # square crops) it will not see what it was trained on. Expect to re-record the pickup on this rig and
+      # retrain (as tigger_bed_1 was), then put that run name here.
+      - vla: pickup_tigger_smolvla_ft          # training run under ~/VLA/outputs/train (run@step or a path also work)
+        task: "pick up tigger"                 # the task string the run was trained with
+        seconds: 90                            # cap on the playing phase
+        still: 3                               # finish early after 3 s without commanded motion
+        keep_grasp: true                       # carry Tigger: hand stays closed, UR stays powered for the drive
+        home: true                             # tuck the arm into the transport pose before driving on
+        on_fail: stop                          # a UR fault / setup failure ends the route here
+
+  - name: banana_bed
+    position: {x: 3.81765, y: 0.556675, z: 0.0}           # PLACEHOLDER (= livingroom_entrance) — record the bed pose
+    orientation: {x: 0.0, y: 0.0, z: 0.997403, w: 0.072021}
+    post_actions:
+      - vla: tigger_bed_1_smolvla
+        task: "place tigger in the banana bed"
+        seconds: 90
+        still: 3                               # the hand opens at the end (keep_grasp is off), then home
+
+  - name: charger                              # continue the route after the drop-off
+    position: {x: 6.171422, y: -7.756816, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.595315, w: 0.803492}
+    post_actions:
+      - 'ROS_DOMAIN_ID=0 ros2 topic pub --once /battery sensor_msgs/BatteryState "{percentage: 0.82, power_supply_status: 1}"'

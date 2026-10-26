@@ -1068,34 +1068,55 @@ Detections are published on `/apriltag/apriltag_detections` and as TF frames (`<
 A plain Python script (not a ROS package) built on `nav2_simple_commander`. Run it on the robot once bringup, localization and navigation are up:
 
 ```bash
-cd ~/rd_ws/Scripts && python3 path.py
+cd ~/rd_ws/Scripts && python3 path.py                 # waypoints.yaml next to the script
+cd ~/rd_ws/Scripts && python3 path.py tigger_route.yaml  # any route file
+python3 path.py --check tigger_route.yaml                 # parse only: segments + the commands, no ROS
 ```
 
 What it does, in order:
 
 1. Waits for Nav2 to become active.
-2. Loads `waypoints.yaml` from the same directory (always that file; `test_waypoints.yaml` is a spare you swap in by hand).
+2. Loads `waypoints.yaml` from the same directory, or the route file given as the first argument.
 3. If the file has an `initial_pose`, publishes it to `/initialpose` to seed AMCL, then runs its `post_actions`.
 4. Publishes the route on `/waypoints_path` (`nav_msgs/Path`, transient-local) so Foxglove's 3D panel shows it.
 5. Waits for the `start_waypoints` Trigger service — the Foxglove "Party" button calls it — then runs Nav2 `FollowWaypoints`.
-6. Runs each waypoint's `post_actions` when the robot moves on to the next waypoint (arrival is inferred from the action feedback index advancing), and the last waypoint's on completion.
+6. Runs each waypoint's background `post_actions` when the robot moves on to the next waypoint (arrival is inferred from the action feedback index advancing), and the last waypoint's on completion. A waypoint with a **blocking** action (`wait: true`, or any `vla:` action) ends a `FollowWaypoints` segment: the robot stops there, the blocking actions run in order while the node keeps spinning, then the next segment starts. A failed blocking action with `on_fail: stop` (the default) ends the route where the robot stands.
 
-`waypoints.yaml` format:
+Route file format:
 
 ```yaml
 waypoints:
   - name: charger
     position: {x: 2.99, y: 1.99, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: -0.004, w: 1.0}   # always give a full quaternion; a missing w defaults to 0
-    post_actions:                                       # shell commands, run in the background
+    post_actions:
       - 'ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState "{percentage: 0.82, power_supply_status: 0}"'
-      - ffplay -nodisp -autoexit /home/rd/Music/track.mp3
+      - ffplay -nodisp -autoexit /home/rd/Music/track.mp3   # plain strings: shell commands, run in the background
+      - run: "some command"                                  # the same with options:
+        wait: true                                           #   blocking — the robot stops here until it exits
+        on_fail: stop                                        #   stop (default) | continue, blocking only
+  - name: bookshelf
+    position: {x: 2.54, y: 1.44, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.995, w: 0.102}
+    post_actions:
+      - vla: pickup_tigger_smolvla_ft    # a VLA policy run on the arm (always blocking): a training run
+        task: "pick up tigger"           #   name, run@step or a path under ~/VLA/outputs/train, and the
+        seconds: 90                      #   task string it was trained with; cap on the playing phase
+        still: 3                         #   finish early after N s without commanded motion (0 = off)
+        keep_grasp: true                 #   carry the object: hand stays closed, UR stays powered
+        home: true                       #   return the arm to its home (transport) pose before driving on
 
 initial_pose:
   position: {x: 0.36, y: -0.14, z: 0.0}
   orientation: {x: 0.0, y: 0.0, z: 0.012, w: 1.0}
   post_actions: []
 ```
+
+A `vla:` action runs `~/VLA/scripts/vla_action.py`, which stops the recording panel if it is up, switches the
+robot's inference server to that model (a ~30 s restart only when the model changes), runs
+`scripts/eval_hw.py --auto` and returns when the arm is back home; the run lands in the eval registry like
+any other. `Scripts/tigger_route.yaml` is the fetch-and-carry example (bookshelf → pick up Tigger → banana
+bed → place). Details: `VLA/wiki/Deploy-on-Hardware.md`, "Unattended runs".
 
 All poses are in the `map` frame, so they must be re-recorded after a fresh SLAM map (see [Maps](#maps)). The easiest way to capture a pose is to drive there and `ros2 topic echo /amcl_pose --once`.
 
