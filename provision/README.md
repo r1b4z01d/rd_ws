@@ -64,7 +64,7 @@ Each phase can be run alone and re-run safely, e.g. `provision.sh workspace` aft
 | `services` | supervisor web UI on `:9999`, `Scripts/install_services.sh` (supervisor units) and `~/start_face.sh` |
 | `display` | GDM autologin for `rd`, no screen blanking or lock |
 | `foxglove` | `docker load` from `FOXGLOVE_IMAGE_TAR` or the snapshot, else builds `foxglove_studio/Dockerfile` (slow, needs internet) |
-| `vla` | *(not in `all`)* `~/VLA/.venv` from the snapshot freeze or `pip-vla.txt`, `run.sh`, `install_services.sh rd` |
+| `vla` | *(not in `all`)* `~/VLA/.venv` from the snapshot freeze or `pip-vla.txt`, `run.sh`, `install_services.sh rd` (camera service + ROS bridge, and the manual-start `vla_teleop` / `vla_eval` units with their `~/VLA/config/*.env` argument files) |
 | `network` | *(not in `all`)* static `192.168.11.80/24`, no gateway, from `netplan/01-robot-disco.yaml` |
 
 Environment knobs are listed at the top of `provision.sh` (`RD_USER`, `RD_WS_REF`, `SNAPSHOT`,
@@ -117,7 +117,7 @@ overrides only what differs on JetPack 6.x (Ubuntu 22.04, aarch64):
 | `base` | adds `jetson/apt-packages-jetson.txt` (boost/cmake/openblas for the source builds, `nvidia-jetpack`) |
 | `jetson` *(new)* | `nvpmodel -m 0` (MAXN), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop` |
 | `vla` | cuSPARSELt, then **torch 2.8.0 / torchvision 0.23.0 from `https://pypi.jetson-ai-lab.io/jp6/cu126`** (CUDA builds; PyPI torch has no Jetson CUDA), then `jetson/pip-vla-jetson.txt` = `lerobot[smolvla]==0.4.4` + the rest. `ur_rtde` and `moderngl` compile from source (no arm64 wheels). Asserts `torch.cuda.is_available()`. |
-| `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd` |
+| `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd`; the same install drops `vla_teleop` / `vla_eval` (manual start: `sudo supervisorctl start vla_teleop`, arguments in `~/VLA/config/teleop.env` / `eval.env`) |
 | `foxglove` | always an arm64 build; refuses to trust an x86 tarball |
 | `network` | netplan renderer `NetworkManager` (JetPack desktop default) |
 

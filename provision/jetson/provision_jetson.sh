@@ -175,6 +175,12 @@ phase_infer() {
   [ -x "$vla/.venv/bin/python" ] || die "run 'provision_jetson.sh vla' first"
   [ -f "$vla/services/rd/vla_infer_server.conf" ] \
     || die "$vla/services/rd/vla_infer_server.conf missing: copy a VLA tree that has it (it is in the VLA repo)"
+  # services/rd/ also holds the MANUAL-start apps as units: vla_teleop (recording panel) and vla_eval
+  # (policy eval), each reading its arguments from ~/VLA/config/{teleop,eval}.env — install_services.sh rd
+  # creates those from the .example files on first install and never overwrites them. Start them with
+  # `sudo supervisorctl start vla_teleop|vla_eval` or the ▶ buttons on the manager's RobotDisco Teleop
+  # tab (which needs the GPU box's ssh key authorized for rd@<this box>). They need the X display of
+  # rd's autologin session (DISPLAY=:0, XAUTHORITY=/run/user/1000/gdm/Xauthority), as the units declare.
   mkdir -p "$vla/outputs" "$vla/log"
   if [ -n "${SERVE_CKPT:-}" ]; then
     [ -d "$SERVE_CKPT" ] || die "SERVE_CKPT=$SERVE_CKPT is not a directory"
