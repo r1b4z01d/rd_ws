@@ -14,8 +14,10 @@ post_actions entries (per waypoint, and for initial_pose):
     task: "..."                       name, run@step, or a path under ~/VLA/outputs/train; task = the
     seconds: 120                      string it was trained with. Cap on the playing phase (wall clock).
     still: 0                        finish early after N s without commanded motion (0 = off)
-    still_mode: all                 all | fingers — 'fingers' ends the run once the fingers have moved
-                                      (grasp / release) and then stayed still for `still` seconds
+    done: none                      closed | open — end by the GRASP LEVEL: 'closed' once the mean
+                                      commanded curl has averaged >= 0.7 over `still` seconds (a pick),
+                                      'open' once it averages <= 0.2 after having been closed (a place)
+    still_mode: all                 all | fingers — motion-based alternative (noisy; prefer done:)
     wait_go: false                  launch paused and wait for PLAY (deck / page) as the go
     steps: 0                        cap in control steps (0 = off)
     keep_grasp: false               carry the object: hand stays closed, UR stays powered for the drive
@@ -91,6 +93,8 @@ def vla_command(raw: dict, where: str) -> list[str]:
         cmd.append("--no-home")
     if raw.get("still_mode"):
         cmd += ["--still-mode", str(raw["still_mode"])]
+    if raw.get("done"):
+        cmd += ["--done-when", str(raw["done"])]
     if raw.get("wait_go"):
         cmd.append("--wait-go")
     if raw.get("extra"):

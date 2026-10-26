@@ -1102,8 +1102,8 @@ waypoints:
       - vla: pickup_tigger_smolvla_ft    # a VLA policy run on the arm (always blocking): a training run
         task: "pick up tigger"           #   name, run@step or a path under ~/VLA/outputs/train, and the
         seconds: 90                      #   task string it was trained with; cap on the playing phase
-        still: 3                         #   finish early after N s without commanded motion (0 = off)
-        still_mode: fingers              #   all | fingers: only the fingers, once they have moved (the grasp happened)
+        done: closed                     #   end by the grasp level: closed (a pick) | open (a place, after holding)
+        still: 2                         #   averaging window (s) for done:, or motion-stillness seconds without it
         keep_grasp: true                 #   carry the object: hand stays closed, UR stays powered
         home: true                       #   return the arm to its home (transport) pose before driving on
 

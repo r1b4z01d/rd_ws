@@ -19,8 +19,8 @@ waypoints:
       - vla: tigger_1_merged_smolvla_1         # training run under ~/VLA/outputs/train (run@step or a path also work)
         task: "Grab and hold tigger"           # the task string the run was trained with
         seconds: 90                            # cap on the playing phase
-        still: 3                               # finish early after 3 s without motion…
-        still_mode: fingers                    # …of the FINGERS, once they have moved (the grasp happened)
+        done: closed                           # over when the hand has closed and stayed closed (mean curl >= 0.7
+        still: 2                               #   averaged over 2 s); robust to the policy's jitter / re-grasps
         keep_grasp: true                       # carry Tigger: hand stays closed, UR stays powered for the drive
         home: true                             # tuck the arm into the transport pose before driving on
         on_fail: stop                          # a UR fault / setup failure ends the route here
@@ -32,8 +32,8 @@ waypoints:
       - vla: tigger_bed_1_smolvla
         task: "place tigger in the banana bed"
         seconds: 90
-        still: 3                               # 3 s after the fingers settle (the release happened), then home
-        still_mode: fingers
+        done: open                             # over when the hand has opened after holding (mean curl <= 0.2 over 2 s)
+        still: 2
 
   - name: charger                              # continue the route after the drop-off
     position: {x: 6.171422, y: -7.756816, z: 0.0}
