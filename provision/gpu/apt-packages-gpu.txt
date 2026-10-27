@@ -1,0 +1,20 @@
+# Base packages for the GPU box (Ubuntu 24.04, RTX 4090). A fresh 24.04 install has NONE of curl, git,
+# supervisor or a C toolchain (found 2026-10-26: `curl: command not found` broke the first installer run).
+# The NVIDIA driver is NOT in this list: the 24.04 installer's "third-party drivers" box installs it
+# (535 on 20.04 -> 595 on the new box); check `nvidia-smi` before running provision_gpu.sh.
+curl
+ca-certificates
+software-properties-common
+git
+rsync
+supervisor
+build-essential
+pkg-config
+python3-dev
+ffmpeg
+# PyAV (lerobot video decode) builds from source when no wheel matches; these make that work
+libavdevice-dev
+libavformat-dev
+libavcodec-dev
+libavutil-dev
+libswscale-dev

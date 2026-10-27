@@ -9,6 +9,7 @@ are two scripts:
 | `capture_rd_state.sh` | your workstation | Snapshot a working robot PC: installed packages, local edits, maps, learned faces, TTS cache, foxglove image. Doubles as a backup. |
 | `provision.sh` | the new machine | Idempotent, phased installer. Optionally restores from a snapshot. |
 | `jetson/provision_jetson.sh` | a Jetson Orin | Same phases for JetPack 6.x plus CUDA torch and the local VLA inference server. |
+| `gpu/provision_gpu.sh` | the GPU box (Ubuntu 24.04, RTX 4090) | Training box + VLA web manager: venv, supervisor units, data from RD, optional Wi-Fi/desktop apps. See `gpu/README.md`. |
 
 Manifests the installer reads: `apt-packages.txt`, `ros-packages.txt`, `pip-robot-face.txt`,
 `pip-robot-face-tts.txt`, `pip-vla.txt`, `udev/99-robot-disco.rules`, `netplan/01-robot-disco.yaml`,

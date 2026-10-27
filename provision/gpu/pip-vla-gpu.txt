@@ -1,0 +1,31 @@
+# VLA venv on the GPU box (~/VLA/.venv, Python 3.12 via uv, x86-64, CUDA 12.8 wheels from PyPI).
+# Prefer gpu/vla-venv-freeze.txt (the exact working freeze, 2026-10-26) — provision_gpu.sh uses it when
+# present. This file is the by-hand equivalent and the reasons for each pin:
+#
+#  torch/torchvision  2.8.0 / 0.23.0 — match RD; inside lerobot 0.4.4's ranges (torch<2.11). PyPI's x86
+#                     wheel bundles cu128, no extra index needed (the Jetson needs NVIDIA's index).
+#  numpy==1.26.4      installed LAST, as on the Jetson: rerun-sdk/opencv declare numpy>=2 (`uv pip check`
+#                     lists three harmless conflicts), but RD's working stack runs 1.26.4.
+#  pandas==2.3.3      pandas 3.x (what uv resolves first) needs numpy 2 and dies on import with
+#                     "C extension: None not built" once numpy is pinned back. Same for scipy 1.15.3.
+#  pyarrow==25.0.1    match RD.
+#  fastapi, uvicorn   webui/server.py needs them; the RD manifests don't (RD never runs the web UI), so
+#                     vla_webui crash-loops on a fresh box with "No module named 'fastapi'".
+torch==2.8.0
+torchvision==0.23.0
+lerobot[smolvla]==0.4.4
+hidapi
+evdev
+opencv-python<4.13
+scipy==1.15.3
+pandas==2.3.3
+pyarrow==25.0.1
+pillow
+mujoco
+mink
+robot_descriptions
+streamdeck
+ur_rtde
+fastapi
+uvicorn
+numpy==1.26.4
