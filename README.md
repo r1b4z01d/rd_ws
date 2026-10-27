@@ -30,6 +30,7 @@ A ROS2 workspace for a mobile robot platform with a UR5e arm, animated robot fac
   - [Navigation Stack](#navigation-stack)
   - [Maps](#maps)
 - [Utilities](#utilities)
+  - [Recording a route by driving (`Scripts/record_path.py`)](#recording-a-route-by-driving-scriptsrecord_pathpy)
   - [Waypoint runner (`Scripts/path.py`)](#waypoint-runner-scriptspathpy)
 
 ---
@@ -1062,6 +1063,29 @@ ros2 launch apriltag_ros tag_realsense.launch.py camera_name:=/camera/camera/col
 ```
 
 Detections are published on `/apriltag/apriltag_detections` and as TF frames (`<family>:<id>`, or the names in `tag_frames`). For map relocalization use `apriltag_relocalization_launch.py` instead (see [AprilTag map relocalization](#apriltag-map-relocalization)).
+
+### Recording a route by driving (`Scripts/record_path.py`)
+
+Instead of typing poses, drive the route once and let the recorder reduce it to waypoints:
+
+```bash
+sudo supervisorctl start robot_disco_localization     # AMCL on the saved map (TF map -> base_footprint)
+cd ~/rd_ws/Scripts && python3 record_path.py record tigger
+#   drive with the gamepad (hold the enable button); at each place that matters type its name + Enter
+#   (bookshelf, banana_bed, …) — that pose is kept with the heading you parked at; q + Enter finishes
+python3 path.py --check tigger.yaml
+```
+
+It samples the map pose whenever the robot moves and writes three files next to the script:
+`tigger.raw.yaml` (every sample + marks), `tigger.yaml` (the route for `path.py`) and `tigger.svg`
+(grey raw trace, blue route, red marks — open it on the workstation). The reduction is
+Ramer-Douglas-Peucker with `--tolerance` metres of allowed deviation (default 0.25), cut at every mark,
+then unmarked points closer than `--min-spacing` (0.4 m) are dropped; unmarked waypoints face the next
+one so Nav2 does not spin to match a noisy heading. Re-reduce without re-driving with
+`python3 record_path.py simplify tigger.raw.yaml --tolerance 0.4`. Marked names become the waypoint
+names, which is where `post_actions` go: `--actions-from tigger_route.yaml` copies the post_actions of
+same-named waypoints from an existing route, so a freshly recorded route gets its `vla:` actions in one
+step (or add them by hand afterwards). `--source amcl` samples `/amcl_pose` instead of TF.
 
 ### Waypoint runner (`Scripts/path.py`)
 
