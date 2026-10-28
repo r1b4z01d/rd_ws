@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route editor</title>
+<style>
+  :root { --bg: #15171c; --panel: #1f2229; --line: #343846; --fg: #e8e9ee; --muted: #9aa0ad; --accent: #4f8cff; --ok: #2ea043; --danger: #c93c3c; --mark: #e04848; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #side { width: 340px; background: var(--panel); border-right: 1px solid var(--line); padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  #main { flex: 1; position: relative; }
+  canvas { width: 100%; height: 100%; display: block; cursor: crosshair; background: #0b0c0f; }
+  h1 { font-size: 15px; margin: 0; letter-spacing: .03em; }
+  h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 6px 0 2px; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  select, input, textarea, button { background: #272b35; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+  input[type=number] { width: 86px; }
+  textarea { width: 100%; min-height: 90px; font: 12px/1.35 ui-monospace, Menlo, monospace; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #list { max-height: 30vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+  #list div { padding: 3px 8px; cursor: pointer; display: flex; justify-content: space-between; }
+  #list div:hover { background: #2a2f3b; } #list div.sel { background: #30405f; }
+  #list .mark { color: var(--mark); }
+  .muted { color: var(--muted); font-size: 12px; }
+  pre#out { background: #0f1115; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 11px; max-height: 22vh; overflow: auto; margin: 0; white-space: pre-wrap; }
+  #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none; }
+  #help { position: absolute; right: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 420px; }
+  label.cb { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>Route editor</h1>
+  <div class="row">
+    <select id="routes" title="route file in Scripts/"></select>
+    <button id="load">Load</button>
+    <button id="new">New</button>
+  </div>
+  <div class="row">
+    <input id="savename" placeholder="save as (name)" style="flex:1">
+    <button id="save" class="ok">Save</button>
+  </div>
+  <div class="row">
+    <button id="addrobot" title="add a waypoint at the robot's live pose">+ at robot</button>
+    <label class="cb"><input type="checkbox" id="clickadd" checked> click adds</label>
+    <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
+  </div>
+  <div class="row">
+    <button id="center" title="record_path.py center: unmarked waypoints to the middle of their corridor (on the saved file)">centre</button>
+    <button id="densify" title="record_path.py densify: intermediate waypoints on long legs (on the saved file)">densify</button>
+    <input id="spacing" type="number" step="0.1" value="1.0" title="densify spacing, m">
+  </div>
+  <h3>Waypoints <span class="muted" id="count"></span></h3>
+  <div id="list"></div>
+  <h3>Selected</h3>
+  <div class="row"><input id="wname" placeholder="name" style="flex:1"></div>
+  <div class="row">
+    <label>x <input id="wx" type="number" step="0.01"></label>
+    <label>y <input id="wy" type="number" step="0.01"></label>
+    <label>yaw° <input id="wyaw" type="number" step="1"></label>
+  </div>
+  <div class="row">
+    <button id="up">▲</button><button id="down">▼</button>
+    <button id="facenext" title="heading toward the next waypoint">face next</button>
+    <button id="del" class="danger">delete</button>
+  </div>
+  <div class="muted">post_actions (YAML list; leave empty for a drive-through point)</div>
+  <textarea id="wactions" placeholder="- vla: tigger_1_merged_smolvla_1&#10;  task: Grab and hold tigger&#10;  done: closed&#10;  keep_grasp: true"></textarea>
+  <h3>Output</h3>
+  <pre id="out"></pre>
+</div>
+<div id="main">
+  <canvas id="c"></canvas>
+  <div id="status">loading…</div>
+  <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · marked (named, red) poses keep their heading; others face the next by default</div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const canvas = $("#c"), ctx = canvas.getContext("2d");
+let MAP = null, img = new Image(), route = {name: "", waypoints: [], initial_pose: null, raw_trace: []};
+let sel = -1, pose = null, rosStatus = "";
+let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
+let drag = null;                               // {kind: 'pan'|'move'|'yaw', ...}
+let dirty = false;
+
+const w2p = (x, y) => [(x - MAP.origin[0]) / MAP.resolution, MAP.height - (y - MAP.origin[1]) / MAP.resolution];   // world -> map px
+const p2w = (px, py) => [MAP.origin[0] + px * MAP.resolution, MAP.origin[1] + (MAP.height - py) * MAP.resolution];
+const w2c = (x, y) => { const [px, py] = w2p(x, y); return [px * view.scale + view.tx, py * view.scale + view.ty]; };
+const c2w = (cx, cy) => p2w((cx - view.tx) / view.scale, (cy - view.ty) / view.scale);
+const isMarked = w => !/^(wp_|x_|start$|here_)/.test(w.name) || (w.post_actions && w.post_actions.length);
+
+function resize() { const r = canvas.getBoundingClientRect(); canvas.width = r.width * devicePixelRatio; canvas.height = r.height * devicePixelRatio; ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); draw(); }
+window.addEventListener("resize", resize);
+
+function fit() {
+  const r = canvas.getBoundingClientRect();
+  view.scale = Math.min(r.width / MAP.width, r.height / MAP.height) * 0.95;
+  view.tx = (r.width - MAP.width * view.scale) / 2; view.ty = (r.height - MAP.height * view.scale) / 2;
+}
+
+function draw() {
+  if (!MAP) return;
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  ctx.imageSmoothingEnabled = view.scale < 2;
+  ctx.drawImage(img, view.tx, view.ty, MAP.width * view.scale, MAP.height * view.scale);
+  // 1 m grid
+  const gx0 = Math.floor(MAP.origin[0]), gx1 = Math.ceil(MAP.origin[0] + MAP.width * MAP.resolution);
+  const gy0 = Math.floor(MAP.origin[1]), gy1 = Math.ceil(MAP.origin[1] + MAP.height * MAP.resolution);
+  ctx.strokeStyle = "rgba(80,140,255,.25)"; ctx.lineWidth = 1; ctx.font = "10px sans-serif"; ctx.fillStyle = "rgba(120,170,255,.6)";
+  for (let gx = gx0; gx <= gx1; gx++) { const [a, b] = w2c(gx, gy0), [c, d] = w2c(gx, gy1); ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); ctx.fillText(gx, a + 2, d + 10); }
+  for (let gy = gy0; gy <= gy1; gy++) { const [a, b] = w2c(gx0, gy), [c, d] = w2c(gx1, gy); ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); ctx.fillText(gy, a + 2, b - 2); }
+  // raw trace
+  if ($("#showraw").checked && route.raw_trace && route.raw_trace.length) {
+    ctx.strokeStyle = "rgba(200,200,200,.5)"; ctx.lineWidth = 2; ctx.beginPath();
+    route.raw_trace.forEach((p, i) => { const [a, b] = w2c(p[0], p[1]); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke();
+  }
+  // route polyline
+  const W = route.waypoints;
+  if (W.length > 1) { ctx.strokeStyle = "#4f8cff"; ctx.lineWidth = 2.5; ctx.beginPath(); W.forEach((w, i) => { const [a, b] = w2c(w.x, w.y); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke(); }
+  W.forEach((w, i) => {
+    const [a, b] = w2c(w.x, w.y); const marked = isMarked(w); const col = marked ? "#e04848" : "#4f8cff";
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + 22 * Math.cos(w.yaw), b - 22 * Math.sin(w.yaw)); ctx.stroke();
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(a, b, i === sel ? 8 : (marked ? 6 : 5), 0, Math.PI * 2); ctx.fill();
+    if (i === sel) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
+    ctx.fillStyle = "#fff"; ctx.font = "11px sans-serif"; ctx.fillText(w.name, a + 9, b - 9);
+  });
+  // robot
+  if (pose) {
+    const [a, b] = w2c(pose.x, pose.y); const R = Math.max(6, 0.3 / MAP.resolution * view.scale);
+    ctx.strokeStyle = "#2ea043"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a, b, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + R * 1.6 * Math.cos(pose.yaw), b - R * 1.6 * Math.sin(pose.yaw)); ctx.stroke();
+  }
+  $("#status").textContent = `${route.name || "(new)"}${dirty ? " *" : ""} · ${W.length} waypoints · map ${MAP.name} ${MAP.resolution} m/px · robot: ${pose ? `(${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : rosStatus}`;
+}
+
+function hit(cx, cy) {
+  let best = -1, bd = 12;
+  route.waypoints.forEach((w, i) => { const [a, b] = w2c(w.x, w.y); const d = Math.hypot(a - cx, b - cy); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function renderList() {
+  const L = $("#list"); L.innerHTML = "";
+  route.waypoints.forEach((w, i) => {
+    const d = document.createElement("div"); d.className = (i === sel ? "sel " : "") + (isMarked(w) ? "mark" : "");
+    d.innerHTML = `<span>${i + 1}. ${w.name}${w.post_actions && w.post_actions.length ? " ⚑" : ""}</span><span class="muted">${w.x.toFixed(2)}, ${w.y.toFixed(2)}</span>`;
+    d.onclick = () => select(i); L.appendChild(d);
+  });
+  $("#count").textContent = route.waypoints.length ? `(${route.waypoints.length})` : "";
+}
+function select(i) {
+  sel = i; const w = route.waypoints[i];
+  $("#wname").value = w ? w.name : ""; $("#wx").value = w ? w.x.toFixed(3) : ""; $("#wy").value = w ? w.y.toFixed(3) : "";
+  $("#wyaw").value = w ? (w.yaw * 180 / Math.PI).toFixed(1) : "";
+  $("#wactions").value = w && w.post_actions && w.post_actions.length ? jsyaml(w.post_actions) : "";
+  renderList(); draw();
+}
+// tiny YAML emitter for the actions list (plain scalars / nested maps / lists) and a tolerant parser
+function jsyaml(v, ind = 0) {
+  const pad = " ".repeat(ind);
+  if (Array.isArray(v)) return v.map(x => (typeof x === "object" && x !== null) ? pad + "- " + jsyaml(x, ind + 2).trimStart() : pad + "- " + scalar(x)).join("\n");
+  if (typeof v === "object" && v !== null) return Object.entries(v).map(([k, x]) => (typeof x === "object" && x !== null) ? `${pad}${k}:\n${jsyaml(x, ind + 2)}` : `${pad}${k}: ${scalar(x)}`).join("\n");
+  return pad + scalar(v);
+}
+function scalar(x) { if (typeof x === "string") return /[:#{}\[\],&*!|>'"%@`]|^\s|\s$|^$/.test(x) ? JSON.stringify(x) : x; return String(x); }
+function parseActions(text) {
+  // sent to the server as text; the server parses YAML. Keep as {_yaml: text} here.
+  return text.trim() ? {_yaml: text} : [];
+}
+
+function setWaypoint(i, patch) { Object.assign(route.waypoints[i], patch); dirty = true; renderList(); draw(); }
+function addAt(x, y, after) {
+  const n = route.waypoints.filter(w => /^wp_\d+$/.test(w.name)).length + 1;
+  const w = {name: `wp_${n}`, x, y, yaw: 0, post_actions: []};
+  const idx = (after == null ? route.waypoints.length - 1 : after) + 1;
+  route.waypoints.splice(idx, 0, w);
+  // face the next waypoint, or continue the previous heading
+  const nx = route.waypoints[idx + 1], pv = route.waypoints[idx - 1];
+  w.yaw = nx ? Math.atan2(nx.y - y, nx.x - x) : (pv ? Math.atan2(y - pv.y, x - pv.x) : 0);
+  if (pv && !isMarked(pv)) pv.yaw = Math.atan2(y - pv.y, x - pv.x);
+  dirty = true; select(idx);
+}
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault(); const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15; view.tx = cx - (cx - view.tx) * f; view.ty = cy - (cy - view.ty) * f; view.scale *= f; draw();
+}, {passive: false});
+canvas.addEventListener("mousedown", e => {
+  const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top; const i = hit(cx, cy);
+  if (i >= 0) { select(i); drag = {kind: e.shiftKey ? "yaw" : "move", i, moved: false}; }
+  else drag = {kind: "pan", x0: cx, y0: cy, tx: view.tx, ty: view.ty, moved: false};
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  if (drag.kind === "pan") { if (Math.hypot(cx - drag.x0, cy - drag.y0) > 3) drag.moved = true; view.tx = drag.tx + cx - drag.x0; view.ty = drag.ty + cy - drag.y0; draw(); }
+  else if (drag.kind === "move") { const [x, y] = c2w(cx, cy); drag.moved = true; setWaypoint(drag.i, {x, y}); select(drag.i); }
+  else if (drag.kind === "yaw") { const w = route.waypoints[drag.i]; const [a, b] = w2c(w.x, w.y); drag.moved = true; setWaypoint(drag.i, {yaw: Math.atan2(-(cy - b), cx - a)}); select(drag.i); }
+});
+window.addEventListener("mouseup", e => {
+  if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  if (drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
+  drag = null;
+});
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "Delete" || e.key === "Backspace") $("#del").click();
+  if (e.key === "Escape") select(-1);
+});
+
+$("#wname").oninput = () => sel >= 0 && setWaypoint(sel, {name: $("#wname").value});
+$("#wx").onchange = () => sel >= 0 && setWaypoint(sel, {x: parseFloat($("#wx").value)});
+$("#wy").onchange = () => sel >= 0 && setWaypoint(sel, {y: parseFloat($("#wy").value)});
+$("#wyaw").onchange = () => sel >= 0 && setWaypoint(sel, {yaw: parseFloat($("#wyaw").value) * Math.PI / 180});
+$("#wactions").onchange = () => sel >= 0 && setWaypoint(sel, {post_actions: parseActions($("#wactions").value)});
+$("#del").onclick = () => { if (sel < 0) return; route.waypoints.splice(sel, 1); dirty = true; select(Math.min(sel, route.waypoints.length - 1)); };
+$("#up").onclick = () => { if (sel > 0) { const W = route.waypoints; [W[sel - 1], W[sel]] = [W[sel], W[sel - 1]]; dirty = true; select(sel - 1); } };
+$("#down").onclick = () => { if (sel >= 0 && sel < route.waypoints.length - 1) { const W = route.waypoints; [W[sel + 1], W[sel]] = [W[sel], W[sel + 1]]; dirty = true; select(sel + 1); } };
+$("#facenext").onclick = () => { if (sel >= 0 && sel < route.waypoints.length - 1) { const w = route.waypoints[sel], n = route.waypoints[sel + 1]; setWaypoint(sel, {yaw: Math.atan2(n.y - w.y, n.x - w.x)}); select(sel); } };
+$("#addrobot").onclick = () => { if (!pose) { out("no live robot pose (" + rosStatus + ")"); return; } addAt(pose.x, pose.y, sel >= 0 ? sel : null); setWaypoint(sel, {yaw: pose.yaw, name: `here_${route.waypoints.filter(w => /^here_/.test(w.name)).length + 1}`}); select(sel); };
+$("#new").onclick = () => { route = {name: "", waypoints: [], initial_pose: null, raw_trace: []}; sel = -1; dirty = false; $("#savename").value = ""; select(-1); };
+$("#load").onclick = () => loadRoute($("#routes").value);
+$("#save").onclick = async () => {
+  const name = ($("#savename").value || route.name || "").trim(); if (!name) { out("give the route a name"); return; }
+  const body = {waypoints: route.waypoints.map(w => ({...w, post_actions: w.post_actions})), initial_pose: route.initial_pose};
+  const r = await fetch(`/api/route?name=${encodeURIComponent(name)}`, {method: "POST", body: JSON.stringify(body)}).then(r => r.json());
+  if (r.error) { out("save failed: " + r.error); return; }
+  dirty = false; route.name = name; out(`saved ${name}.yaml\n` + r.check); await loadRoutes(); $("#routes").value = name; draw();
+};
+async function tool(name) {
+  const rn = route.name; if (!rn || dirty) { out("save the route first"); return; }
+  const r = await fetch(`/api/tool?tool=${name}&name=${encodeURIComponent(rn)}`, {method: "POST", body: JSON.stringify({spacing: parseFloat($("#spacing").value) || 1.0})}).then(r => r.json());
+  if (r.error) { out(name + " failed: " + r.error); return; }
+  out(r.output); setRoute(r.route);
+}
+$("#center").onclick = () => tool("center"); $("#densify").onclick = () => tool("densify");
+function out(t) { $("#out").textContent = t; }
+function setRoute(d) { route = d; route.raw_trace = d.raw_trace || []; sel = -1; dirty = false; $("#savename").value = d.name; select(-1); }
+async function loadRoute(name) { const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then(r => r.json()); if (d.error) { out(d.error); return; } setRoute(d); out(`loaded ${name}.yaml: ${d.waypoints.length} waypoints`); }
+async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
+async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+(async () => {
+  MAP = await fetch("/api/map").then(r => r.json());
+  img.onload = () => { resize(); fit(); draw(); }; img.src = MAP.image;
+  await loadRoutes();
+  const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
+  poll();
+})();
+window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+</script>
+</body>
+</html>

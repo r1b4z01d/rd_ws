@@ -30,6 +30,7 @@ A ROS2 workspace for a mobile robot platform with a UR5e arm, animated robot fac
   - [Navigation Stack](#navigation-stack)
   - [Maps](#maps)
 - [Utilities](#utilities)
+  - [Route editor in the browser (`Scripts/route_editor.py`)](#route-editor-in-the-browser-scriptsroute_editorpy)
   - [Recording a route by driving (`Scripts/record_path.py`)](#recording-a-route-by-driving-scriptsrecord_pathpy)
   - [Waypoint runner (`Scripts/path.py`)](#waypoint-runner-scriptspathpy)
 
@@ -1063,6 +1064,16 @@ ros2 launch apriltag_ros tag_realsense.launch.py camera_name:=/camera/camera/col
 ```
 
 Detections are published on `/apriltag/apriltag_detections` and as TF frames (`<family>:<id>`, or the names in `tag_frames`). For map relocalization use `apriltag_relocalization_launch.py` instead (see [AprilTag map relocalization](#apriltag-map-relocalization)).
+
+### Route editor in the browser (`Scripts/route_editor.py`)
+
+`http://192.168.11.80:8092/` (supervisor unit `robot_disco_route_editor`, autostarts) shows the nav2 map
+with a 1 m grid, the robot's live pose (green) and any route from `Scripts/` with its recorded trace
+(grey). Click the map to add a waypoint after the selected one, drag to move it, shift-drag to turn its
+heading, type a name and `post_actions` (YAML) in the side panel, reorder or delete, **+ at robot** adds
+a waypoint at the robot's pose. **Save** writes `<name>.yaml` in `path.py`'s format and runs
+`path.py --check` on it; **centre** and **densify** run `record_path.py`'s tools on the saved file.
+Named (red) waypoints keep their heading; `wp_…` points face the next one.
 
 ### Recording a route by driving (`Scripts/record_path.py`)
 
