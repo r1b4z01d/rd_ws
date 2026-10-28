@@ -1,0 +1,55 @@
+# Recorded with record_path.py on 2026-10-27T20:06:45 (855 samples, 19.253 m), reduced with tolerance 0.25 m / min spacing 0.4 m.
+# Marked poses keep their recorded heading; the others face the next waypoint. Re-run
+# `python3 record_path.py simplify tigger.raw.yaml --tolerance …` to change the reduction.
+waypoints:
+  - name: Charger   # marked
+    position: {x: 0.6957, y: 0.9208, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.027397, w: 0.999625}
+  - name: wp_1
+    position: {x: 1.5628, y: 1.203, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.431852, w: 0.901945}
+  - name: wp_2
+    position: {x: 2.606, y: 2.4991, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.014693, w: 0.999892}
+  - name: wp_3
+    position: {x: 7.6035, y: 2.3522, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.489534, w: 0.871984}
+  - name: wp_4
+    position: {x: 7.9661, y: 2.9467, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.722305, w: 0.691574}
+  - name: wp_5
+    position: {x: 7.8907, y: 4.6804, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.537196, w: 0.843457}
+  - name: wp_6
+    position: {x: 8.9135, y: 6.8724, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.812743, w: 0.582622}
+  - name: bookshelf   # marked
+    position: {x: 8.3923, y: 8.4096, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.998165, w: 0.060559}
+    post_actions:
+      - vla: tigger_1_merged_smolvla_1
+        task: Grab and hold tigger
+        seconds: 90
+        done: closed
+        still: 2
+        keep_grasp: true
+        home: true
+        on_fail: stop
+  - name: banana_bed   # marked
+    position: {x: 8.2349, y: 8.328, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.937978, w: 0.346696}
+    post_actions:
+      - vla: tigger_bed_1_smolvla
+        task: place tigger in the banana bed
+        seconds: 90
+        done: open
+        still: 2
+  - name: wp_9
+    position: {x: 8.8319, y: 6.9331, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.838136, w: 0.545461}
+  - name: wp_10
+    position: {x: 8.388, y: 5.9308, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.999642, w: 0.026765}
+  - name: Right Bookshelf   # marked
+    position: {x: 8.0689, y: 5.9479, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.999977, w: 0.006746}
