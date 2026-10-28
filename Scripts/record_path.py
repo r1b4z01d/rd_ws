@@ -2,6 +2,7 @@
 """Record a route by driving the robot, then reduce it to a few waypoints for path.py.
 
     cd ~/rd_ws/Scripts
+    python3 record_path.py record tigger --init-from waypoints.yaml   # robot at the dock: seeds AMCL first
     python3 record_path.py record tigger            # drive with the gamepad; type a name + Enter at the
                                                     # places that matter (bookshelf, banana_bed, …), q to finish
     python3 record_path.py simplify tigger.raw.yaml --tolerance 0.3   # re-reduce a recording without re-driving
@@ -200,8 +201,19 @@ def write_outputs(raw: dict, out_base: Path, tolerance: float, min_spacing: floa
 
 
 # --------------------------------------------------------------------------- record
+def init_pose_from(path: str) -> tuple:
+    """(x, y, yaw) from a route file's initial_pose (or its first waypoint)."""
+    d = yaml.safe_load(open(path)) or {}
+    e = d.get("initial_pose") or (d.get("waypoints") or [{}])[0]
+    if not e or "position" not in e:
+        raise ValueError(f"{path} has no initial_pose / waypoints to take a pose from")
+    pos, o = e["position"], e.get("orientation", {}) or {}
+    yaw = math.atan2(2.0 * float(o.get("w", 1.0)) * float(o.get("z", 0.0)), 1.0 - 2.0 * float(o.get("z", 0.0)) ** 2)
+    return float(pos.get("x", 0.0)), float(pos.get("y", 0.0)), yaw
+
+
 def record(name: str, out_dir: Path, rate: float, source: str, base_frame: str, tolerance: float,
-           min_spacing: float, actions_from: str | None) -> int:
+           min_spacing: float, actions_from: str | None, init_pose: "tuple | None" = None) -> int:
     import rclpy
     from rclpy.node import Node
 
@@ -234,6 +246,31 @@ def record(name: str, out_dir: Path, rate: float, source: str, base_frame: str, 
                 return None
             t, q = tf.transform.translation, tf.transform.rotation
             return (t.x, t.y, yaw_of(q))
+
+    if init_pose is not None:
+        # AMCL publishes nothing (no map->odom) until it is given an initial pose; seed it the way
+        # path.py does, from the route file's initial_pose or an explicit x y yaw.
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        from rclpy.qos import QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+        qos = QoSProfile(depth=1)
+        qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        qos.reliability = ReliabilityPolicy.RELIABLE
+        pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", qos)
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        ix, iy, iyaw = init_pose
+        msg.pose.pose.position.x, msg.pose.pose.position.y = float(ix), float(iy)
+        q = quat_of(float(iyaw))
+        msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = q["z"], q["w"]
+        msg.pose.covariance[0] = msg.pose.covariance[7] = 0.25
+        msg.pose.covariance[35] = 0.07
+        for _ in range(3):
+            msg.header.stamp = node.get_clock().now().to_msg()
+            pub.publish(msg)
+            rclpy.spin_once(node, timeout_sec=0.3)
+        print(f"[record] initial pose published: ({ix:.2f}, {iy:.2f}) {math.degrees(iyaw):.0f}° — the robot must be there",
+              flush=True)
 
     lines: "queue.Queue[str]" = queue.Queue()
 
@@ -318,12 +355,23 @@ def main() -> int:
     p.add_argument("--rate", type=float, default=5.0, help="sampling rate, Hz")
     p.add_argument("--source", choices=["tf", "amcl"], default="tf")
     p.add_argument("--base-frame", default="base_footprint")
+    p.add_argument("--init-from", default=None, metavar="ROUTE.yaml",
+                   help="publish that file's initial_pose (or first waypoint) to /initialpose first: AMCL needs "
+                        "an initial pose before it publishes any map pose. The robot must be standing there")
+    p.add_argument("--init", nargs=3, type=float, default=None, metavar=("X", "Y", "YAW_DEG"),
+                   help="publish this initial pose instead (map frame, yaw in degrees)")
     p = sub.add_parser("simplify", parents=[common], help="re-reduce an existing NAME.raw.yaml")
     p.add_argument("raw")
     p.add_argument("-o", "--out", default=None, help="route file to write (default: next to the raw file, .yaml)")
     a = ap.parse_args()
     if a.cmd == "record":
-        return record(a.name, Path(a.out), a.rate, a.source, a.base_frame, a.tolerance, a.min_spacing, a.actions_from)
+        init = None
+        if a.init is not None:
+            init = (a.init[0], a.init[1], math.radians(a.init[2]))
+        elif a.init_from:
+            init = init_pose_from(a.init_from)
+        return record(a.name, Path(a.out), a.rate, a.source, a.base_frame, a.tolerance, a.min_spacing,
+                      a.actions_from, init)
     raw = yaml.safe_load(open(a.raw))
     base = Path(a.out).with_suffix("") if a.out else Path(a.raw.replace(".raw.yaml", ""))
     raw.setdefault("name", base.name)
