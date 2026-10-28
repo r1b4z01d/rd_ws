@@ -1,4 +1,4 @@
-# tigger.yaml: here_2 added at the robot's pose (5.959, 1.841, -2 deg) between wp_2_3 and wp_2_4 (0.36 m off that leg).
+# tigger.yaml: here_3 added at the robot's pose (7.163, 1.914, 4 deg) between wp_2_4 and wp_3 (0.40 m off that leg).
 waypoints:
   - name: Charger
     position: {x: 0.6957, y: 0.9208, z: 0.0}
@@ -30,6 +30,9 @@ waypoints:
   - name: wp_2_4
     position: {x: 6.6264, y: 2.2637, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: here_3
+    position: {x: 7.163, y: 1.914, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.035987, w: 0.999352}
   - name: wp_3
     position: {x: 7.6035, y: 2.3522, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.322233, w: 0.946661}
