@@ -2,9 +2,6 @@
 # bookshelf = one beep, banana_bed = two beeps (both blocking: the base stops there like it will for the
 # real actions), Right Bookshelf = three beeps at the end. Run:  python3 path.py tigger_test.yaml
 waypoints:
-  - name: Charger
-    position: {x: 0.6957, y: 0.9208, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.027397, w: 0.999625}
   - name: wp_1
     position: {x: 1.5628, y: 1.203, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.431852, w: 0.901945}
