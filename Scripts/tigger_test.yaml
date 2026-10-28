@@ -1,4 +1,4 @@
-# tigger_test.yaml: here_1 added at the robot's pose (4.943, 1.971, -2 deg) between wp_2_2 and wp_2_3 (0.14 m off that leg).
+# tigger_test.yaml: here_1 = the robot's pose (4.504, 2.069, -4 deg), between wp_2_1 and wp_2_2 (0.00 m off that leg); keeps the parked heading.
 waypoints:
   - name: wp_1
     position: {x: 1.5628, y: 1.203, z: 0.0}
@@ -12,12 +12,12 @@ waypoints:
   - name: wp_2_1
     position: {x: 3.6952, y: 1.9982, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: here_1
+    position: {x: 4.504, y: 2.069, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.032985, w: 0.999456}
   - name: wp_2_2
     position: {x: 4.6723, y: 2.0867, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
-  - name: here_1
-    position: {x: 4.943, y: 1.971, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -0.015002, w: 0.999887}
   - name: wp_2_3
     position: {x: 5.6493, y: 2.1752, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
