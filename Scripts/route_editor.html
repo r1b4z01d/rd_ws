@@ -50,6 +50,11 @@
     <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
   </div>
   <div class="row">
+    <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
+    <button id="redo" title="redo (Ctrl/⌘+Shift+Z or Ctrl+Y)">↷ redo</button>
+    <span class="muted" id="histinfo"></span>
+  </div>
+  <div class="row">
     <button id="center" title="record_path.py center: unmarked waypoints to the middle of their corridor (on the saved file)">centre</button>
     <button id="densify" title="record_path.py densify: intermediate waypoints on long legs (on the saved file)">densify</button>
     <input id="spacing" type="number" step="0.1" value="1.0" title="densify spacing, m">
@@ -77,7 +82,7 @@
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
-  <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · marked (named, red) poses keep their heading; others face the next by default</div>
+  <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script>
 const $ = s => document.querySelector(s);
@@ -87,6 +92,15 @@ let sel = -1, pose = null, rosStatus = "";
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
 let drag = null;                               // {kind: 'pan'|'move'|'yaw', ...}
 let dirty = false;
+// undo / redo: snapshots of the waypoints (+ initial pose) taken BEFORE each change; a drag is one step
+const history = [], future = [], MAXH = 200;
+const snapshot = () => JSON.stringify({waypoints: route.waypoints, initial_pose: route.initial_pose});
+function pushHistory() { history.push(snapshot()); if (history.length > MAXH) history.shift(); future.length = 0; histInfo(); }
+function restore(snap) { const d = JSON.parse(snap); route.waypoints = d.waypoints; route.initial_pose = d.initial_pose; dirty = true; select(sel < route.waypoints.length ? sel : -1); }
+function undo() { if (!history.length) return; future.push(snapshot()); restore(history.pop()); histInfo(); }
+function redo() { if (!future.length) return; history.push(snapshot()); restore(future.pop()); histInfo(); }
+function clearHistory() { history.length = 0; future.length = 0; histInfo(); }
+function histInfo() { const e = $("#histinfo"); if (e) e.textContent = history.length ? `${history.length} step${history.length > 1 ? "s" : ""}` : ""; }
 
 const w2p = (x, y) => [(x - MAP.origin[0]) / MAP.resolution, MAP.height - (y - MAP.origin[1]) / MAP.resolution];   // world -> map px
 const p2w = (px, py) => [MAP.origin[0] + px * MAP.resolution, MAP.origin[1] + (MAP.height - py) * MAP.resolution];
@@ -174,8 +188,9 @@ function parseActions(text) {
   return text.trim() ? {_yaml: text} : [];
 }
 
-function setWaypoint(i, patch) { Object.assign(route.waypoints[i], patch); dirty = true; renderList(); draw(); }
+function setWaypoint(i, patch, noHistory) { if (!noHistory) pushHistory(); Object.assign(route.waypoints[i], patch); dirty = true; renderList(); draw(); }
 function addAt(x, y, after) {
+  pushHistory();
   const n = route.waypoints.filter(w => /^wp_\d+$/.test(w.name)).length + 1;
   const w = {name: `wp_${n}`, x, y, yaw: 0, post_actions: [], pause: 0};
   const idx = (after == null ? route.waypoints.length - 1 : after) + 1;
@@ -193,24 +208,27 @@ canvas.addEventListener("wheel", e => {
 }, {passive: false});
 canvas.addEventListener("mousedown", e => {
   const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top; const i = hit(cx, cy);
-  if (i >= 0) { select(i); drag = {kind: e.shiftKey ? "yaw" : "move", i, moved: false}; }
+  if (i >= 0) { select(i); pushHistory(); drag = {kind: e.shiftKey ? "yaw" : "move", i, moved: false}; }
   else drag = {kind: "pan", x0: cx, y0: cy, tx: view.tx, ty: view.ty, moved: false};
 });
 window.addEventListener("mousemove", e => {
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   if (drag.kind === "pan") { if (Math.hypot(cx - drag.x0, cy - drag.y0) > 3) drag.moved = true; view.tx = drag.tx + cx - drag.x0; view.ty = drag.ty + cy - drag.y0; draw(); }
-  else if (drag.kind === "move") { const [x, y] = c2w(cx, cy); drag.moved = true; setWaypoint(drag.i, {x, y}); select(drag.i); }
-  else if (drag.kind === "yaw") { const w = route.waypoints[drag.i]; const [a, b] = w2c(w.x, w.y); drag.moved = true; setWaypoint(drag.i, {yaw: Math.atan2(-(cy - b), cx - a)}); select(drag.i); }
+  else if (drag.kind === "move") { const [x, y] = c2w(cx, cy); drag.moved = true; setWaypoint(drag.i, {x, y}, true); select(drag.i); }
+  else if (drag.kind === "yaw") { const w = route.waypoints[drag.i]; const [a, b] = w2c(w.x, w.y); drag.moved = true; setWaypoint(drag.i, {yaw: Math.atan2(-(cy - b), cx - a)}, true); select(drag.i); }
 });
 window.addEventListener("mouseup", e => {
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   if (drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
+  if ((drag.kind === "move" || drag.kind === "yaw") && !drag.moved) { history.pop(); histInfo(); }
   drag = null;
 });
 window.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.key === "Delete" || e.key === "Backspace") $("#del").click();
   if (e.key === "Escape") select(-1);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
 });
 
 $("#wname").oninput = () => sel >= 0 && setWaypoint(sel, {name: $("#wname").value});
@@ -219,12 +237,13 @@ $("#wy").onchange = () => sel >= 0 && setWaypoint(sel, {y: parseFloat($("#wy").v
 $("#wyaw").onchange = () => sel >= 0 && setWaypoint(sel, {yaw: parseFloat($("#wyaw").value) * Math.PI / 180});
 $("#wpause").onchange = () => sel >= 0 && setWaypoint(sel, {pause: parseFloat($("#wpause").value) || 0});
 $("#wactions").onchange = () => sel >= 0 && setWaypoint(sel, {post_actions: parseActions($("#wactions").value)});
-$("#del").onclick = () => { if (sel < 0) return; route.waypoints.splice(sel, 1); dirty = true; select(Math.min(sel, route.waypoints.length - 1)); };
-$("#up").onclick = () => { if (sel > 0) { const W = route.waypoints; [W[sel - 1], W[sel]] = [W[sel], W[sel - 1]]; dirty = true; select(sel - 1); } };
-$("#down").onclick = () => { if (sel >= 0 && sel < route.waypoints.length - 1) { const W = route.waypoints; [W[sel + 1], W[sel]] = [W[sel], W[sel + 1]]; dirty = true; select(sel + 1); } };
+$("#del").onclick = () => { if (sel < 0) return; pushHistory(); route.waypoints.splice(sel, 1); dirty = true; select(Math.min(sel, route.waypoints.length - 1)); };
+$("#up").onclick = () => { if (sel > 0) { pushHistory(); const W = route.waypoints; [W[sel - 1], W[sel]] = [W[sel], W[sel - 1]]; dirty = true; select(sel - 1); } };
+$("#down").onclick = () => { if (sel >= 0 && sel < route.waypoints.length - 1) { pushHistory(); const W = route.waypoints; [W[sel + 1], W[sel]] = [W[sel], W[sel + 1]]; dirty = true; select(sel + 1); } };
 $("#facenext").onclick = () => { if (sel >= 0 && sel < route.waypoints.length - 1) { const w = route.waypoints[sel], n = route.waypoints[sel + 1]; setWaypoint(sel, {yaw: Math.atan2(n.y - w.y, n.x - w.x)}); select(sel); } };
-$("#addrobot").onclick = () => { if (!pose) { out("no live robot pose (" + rosStatus + ")"); return; } addAt(pose.x, pose.y, sel >= 0 ? sel : null); setWaypoint(sel, {yaw: pose.yaw, name: `here_${route.waypoints.filter(w => /^here_/.test(w.name)).length + 1}`}); select(sel); };
-$("#new").onclick = () => { route = {name: "", waypoints: [], initial_pose: null, raw_trace: []}; sel = -1; dirty = false; $("#savename").value = ""; select(-1); };
+$("#addrobot").onclick = () => { if (!pose) { out("no live robot pose (" + rosStatus + ")"); return; } addAt(pose.x, pose.y, sel >= 0 ? sel : null); setWaypoint(sel, {yaw: pose.yaw, name: `here_${route.waypoints.filter(w => /^here_/.test(w.name)).length + 1}`}, true); select(sel); };
+$("#new").onclick = () => { route = {name: "", waypoints: [], initial_pose: null, raw_trace: []}; sel = -1; dirty = false; $("#savename").value = ""; clearHistory(); select(-1); };
+$("#undo").onclick = undo; $("#redo").onclick = redo;
 $("#load").onclick = () => loadRoute($("#routes").value);
 $("#save").onclick = async () => {
   const name = ($("#savename").value || route.name || "").trim(); if (!name) { out("give the route a name"); return; }
@@ -237,11 +256,11 @@ async function tool(name) {
   const rn = route.name; if (!rn || dirty) { out("save the route first"); return; }
   const r = await fetch(`/api/tool?tool=${name}&name=${encodeURIComponent(rn)}`, {method: "POST", body: JSON.stringify({spacing: parseFloat($("#spacing").value) || 1.0})}).then(r => r.json());
   if (r.error) { out(name + " failed: " + r.error); return; }
-  out(r.output); setRoute(r.route);
+  out(r.output); pushHistory(); setRoute(r.route, true);
 }
 $("#center").onclick = () => tool("center"); $("#densify").onclick = () => tool("densify");
 function out(t) { $("#out").textContent = t; }
-function setRoute(d) { route = d; route.raw_trace = d.raw_trace || []; sel = -1; dirty = false; $("#savename").value = d.name; select(-1); }
+function setRoute(d, keepHistory) { route = d; route.raw_trace = d.raw_trace || []; sel = -1; dirty = false; $("#savename").value = d.name; if (!keepHistory) clearHistory(); select(-1); }
 async function loadRoute(name) { const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then(r => r.json()); if (d.error) { out(d.error); return; } setRoute(d); out(`loaded ${name}.yaml: ${d.waypoints.length} waypoints`); }
 async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
 async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
