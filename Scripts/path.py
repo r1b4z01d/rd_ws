@@ -329,8 +329,39 @@ def main() -> None:
         navigator.create_subscription(Joy, "/joy", _joy, 10)
         logger.info(f"[deadman] gamepad buttons {deadman['buttons']} stop the route once it is running")
 
+    # Localization watchdog: Nav2 keeps "driving" (recovery spins) on a stale map pose — on 2026-10-27
+    # the map->odom transform froze for 11 minutes and the robot spun in place. Watch the map pose with
+    # our own TF listener while a segment runs; if it goes stale, cancel and stop.
+    from tf2_ros import Buffer, TransformListener
+
+    tf_buf = Buffer()
+    TransformListener(tf_buf, navigator)
+    STALE_S = 3.0
+    stale = {"since": None, "tripped": False}
+
+    def map_pose_age() -> Optional[float]:
+        try:
+            tf = tf_buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
+        except Exception:  # noqa: BLE001
+            return None
+        st = tf.header.stamp
+        return navigator.get_clock().now().nanoseconds / 1e9 - (st.sec + st.nanosec / 1e9)
+
+    def localization_stale() -> bool:
+        age = map_pose_age()
+        now = time.time()
+        if age is None or age > STALE_S:
+            stale["since"] = stale["since"] or now
+            if now - stale["since"] > STALE_S and not stale["tripped"]:
+                stale["tripped"] = True
+                logger.error(f"[localization] map pose {'missing' if age is None else f'{age:.1f} s old'} for "
+                             f"{STALE_S:.0f} s — AMCL is not updating; stopping the route")
+        else:
+            stale["since"] = None
+        return stale["tripped"]
+
     def stopped() -> bool:
-        return deadman["pressed"]
+        return deadman["pressed"] or stale["tripped"]
 
     def fire_background(idx: int, reason: str) -> None:
         """The waypoint's background actions, once, on (inferred) arrival."""
@@ -374,7 +405,7 @@ def main() -> None:
         while rclpy.ok() and not navigator.isTaskComplete():
             spin()
             now = time.time()
-            if stopped() and not cancelled:
+            if (deadman["pressed"] or localization_stale()) and not cancelled:
                 navigator.cancelTask()          # Nav2 stops the base; the loop ends on the cancel result
                 cancelled = True
             feedback = navigator.getFeedback()
@@ -452,6 +483,8 @@ def main() -> None:
 
     if not started:
         logger.warning("Shutting down without starting waypoint following (no service call received).")
+    elif stale["tripped"]:
+        logger.error("Route STOPPED: localization went stale (no fresh map pose).")
     elif stopped():
         logger.warning("Route STOPPED by the deadman button (operator took over).")
     elif stopped_early:
