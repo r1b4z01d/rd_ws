@@ -1,29 +1,27 @@
-# Recorded with record_path.py on 2026-10-27T20:06:45 (855 samples, 19.253 m), reduced with tolerance 0.25 m / min spacing 0.4 m.
-# Marked poses keep their recorded heading; the others face the next waypoint. Re-run
-# `python3 record_path.py simplify tigger.raw.yaml --tolerance …` to change the reduction.
+# tigger.yaml: unmarked waypoints centred in their corridor on zone_one.yaml by record_path.py center (5 moved, max shift 0.6 m).
 waypoints:
-  - name: Charger   # marked
+  - name: Charger
     position: {x: 0.6957, y: 0.9208, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.027397, w: 0.999625}
   - name: wp_1
     position: {x: 1.5628, y: 1.203, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.431852, w: 0.901945}
+    orientation: {x: 0.0, y: 0.0, z: 0.271056, w: 0.962564}
   - name: wp_2
-    position: {x: 2.606, y: 2.4991, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -0.014693, w: 0.999892}
+    position: {x: 2.7181, y: 1.9097, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
   - name: wp_3
     position: {x: 7.6035, y: 2.3522, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.489534, w: 0.871984}
+    orientation: {x: 0.0, y: 0.0, z: 0.359986, w: 0.932958}
   - name: wp_4
-    position: {x: 7.9661, y: 2.9467, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.722305, w: 0.691574}
+    position: {x: 8.2241, y: 2.9149, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.696458, w: 0.717598}
   - name: wp_5
-    position: {x: 7.8907, y: 4.6804, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.537196, w: 0.843457}
+    position: {x: 8.2749, y: 4.6135, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.697904, w: 0.716192}
   - name: wp_6
-    position: {x: 8.9135, y: 6.8724, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.812743, w: 0.582622}
-  - name: bookshelf   # marked
+    position: {x: 8.3338, y: 6.8903, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.69337, w: 0.720582}
+  - name: bookshelf
     position: {x: 8.3923, y: 8.4096, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.998165, w: 0.060559}
     post_actions:
@@ -35,7 +33,7 @@ waypoints:
         keep_grasp: true
         home: true
         on_fail: stop
-  - name: banana_bed   # marked
+  - name: banana_bed
     position: {x: 8.2349, y: 8.328, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: -0.937978, w: 0.346696}
     post_actions:
@@ -45,11 +43,11 @@ waypoints:
         done: open
         still: 2
   - name: wp_9
-    position: {x: 8.8319, y: 6.9331, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: -0.838136, w: 0.545461}
+    position: {x: 8.303, y: 6.8993, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.675489, w: 0.73737}
   - name: wp_10
     position: {x: 8.388, y: 5.9308, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.999642, w: 0.026765}
-  - name: Right Bookshelf   # marked
+  - name: Right Bookshelf
     position: {x: 8.0689, y: 5.9479, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: -0.999977, w: 0.006746}

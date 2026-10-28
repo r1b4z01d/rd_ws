@@ -6,6 +6,8 @@
     python3 record_path.py record tigger            # drive with the gamepad; type a name + Enter at the
                                                     # places that matter (bookshelf, banana_bed, …), q to finish
     python3 record_path.py simplify tigger.raw.yaml --tolerance 0.3   # re-reduce a recording without re-driving
+    python3 record_path.py center tigger.yaml --map ../src/robot_disco/maps/zone_one.yaml   # unmarked waypoints
+                                                    # to the middle of the free corridor they sit in (-o, --max-shift)
     python3 path.py --check tigger.yaml             # what the route runner will do with it
 
 `record` samples the robot's map pose (TF map -> base_footprint by default, /amcl_pose with --source amcl)
@@ -200,6 +202,108 @@ def write_outputs(raw: dict, out_base: Path, tolerance: float, min_spacing: floa
     return wps
 
 
+# --------------------------------------------------------------------------- center on the map
+class GridMap:
+    """A nav2 map (yaml + pgm): world (x, y) -> free / not free."""
+
+    def __init__(self, yaml_path: str):
+        import numpy as np
+
+        meta = yaml.safe_load(open(yaml_path))
+        img_path = os.path.join(os.path.dirname(os.path.abspath(yaml_path)), meta["image"])
+        try:
+            from PIL import Image
+            img = np.array(Image.open(img_path).convert("L"))
+        except ImportError:
+            import cv2
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        self.res = float(meta["resolution"])
+        self.ox, self.oy = float(meta["origin"][0]), float(meta["origin"][1])
+        negate = int(meta.get("negate", 0))
+        free_thresh = float(meta.get("free_thresh", 0.25))
+        occ = img.astype(float) / 255.0
+        occ = occ if negate else 1.0 - occ
+        self.free = occ < free_thresh                      # occupancy probability below the free threshold
+        self.free &= np.abs(img.astype(int) - 205) > 3     # unknown (205) counts as blocked for centring
+        self.h, self.w = img.shape
+
+    def is_free(self, x: float, y: float) -> bool:
+        c = int((x - self.ox) / self.res)
+        r = self.h - 1 - int((y - self.oy) / self.res)
+        return 0 <= r < self.h and 0 <= c < self.w and bool(self.free[r, c])
+
+
+def free_span(gm: GridMap, x: float, y: float, nx: float, ny: float, window: float, step: float = 0.02):
+    """Free distance from (x, y) along +n and along -n (unit vector n), each capped at `window`."""
+    def run(sign: float) -> float:
+        d = 0.0
+        while d < window and gm.is_free(x + sign * nx * d, y + sign * ny * d):
+            d += step
+        return d
+    return run(1.0), run(-1.0)
+
+
+def center_route(route: dict, gm: GridMap, max_shift: float, window: float, max_width: float, log=print) -> int:
+    """Move each UNMARKED waypoint to the middle of the free corridor across the route direction.
+    Marked ones (named by the operator) stay. Skips open areas wider than `max_width`."""
+    wps = route["waypoints"]
+    moved = 0
+    for i, w in enumerate(wps):
+        if w.get("post_actions") or w.get("marked") or not w["name"].startswith(("wp_", "start")):
+            continue
+        prev_ = wps[i - 1] if i > 0 else None
+        next_ = wps[i + 1] if i + 1 < len(wps) else None
+        a, b = (prev_ or w), (next_ or w)
+        dx, dy = b["position"]["x"] - a["position"]["x"], b["position"]["y"] - a["position"]["y"]
+        n = math.hypot(dx, dy)
+        if n < 1e-6:
+            continue
+        nx, ny = -dy / n, dx / n                     # left-hand normal of the route direction
+        x, y = w["position"]["x"], w["position"]["y"]
+        if not gm.is_free(x, y):
+            log(f"  {w['name']:<10} sits on a blocked cell — left alone")
+            continue
+        left, right = free_span(gm, x, y, nx, ny, window)
+        width = left + right
+        if width >= 2 * window - 0.05 or width > max_width:
+            log(f"  {w['name']:<10} open area ({width:.1f} m free across) — left alone")
+            continue
+        shift = (left - right) / 2.0                 # + = move left, toward the wider side
+        shift = max(-max_shift, min(max_shift, shift))
+        if abs(shift) < 0.03:
+            log(f"  {w['name']:<10} already centred (corridor {width:.2f} m)")
+            continue
+        w["position"]["x"], w["position"]["y"] = round(x + nx * shift, 4), round(y + ny * shift, 4)
+        moved += 1
+        log(f"  {w['name']:<10} corridor {width:.2f} m (free {left:.2f} left / {right:.2f} right) -> moved "
+            f"{abs(shift):.2f} m {'left' if shift > 0 else 'right'} of travel to ({w['position']['x']}, {w['position']['y']})")
+    # unmarked waypoints face the next one; re-aim after the moves
+    for i, w in enumerate(wps):
+        if w.get("post_actions") or not w["name"].startswith(("wp_", "start")) or i + 1 >= len(wps):
+            continue
+        nx_, ny_ = wps[i + 1]["position"]["x"], wps[i + 1]["position"]["y"]
+        q = quat_of(math.atan2(ny_ - w["position"]["y"], nx_ - w["position"]["x"]))
+        w["orientation"] = {"x": 0.0, "y": 0.0, "z": q["z"], "w": q["w"]}
+    return moved
+
+
+def write_route(route: dict, path: Path, header: list[str]) -> None:
+    lines = list(header) + ["waypoints:"]
+    for w in route["waypoints"]:
+        p, o = w["position"], w["orientation"]
+        lines.append(f"  - name: {w['name']}")
+        lines.append(f"    position: {{x: {p['x']}, y: {p['y']}, z: {p.get('z', 0.0)}}}")
+        lines.append(f"    orientation: {{x: {o.get('x', 0.0)}, y: {o.get('y', 0.0)}, z: {o['z']}, w: {o['w']}}}")
+        if w.get("post_actions"):
+            lines.append("    post_actions:")
+            lines += ["      " + l for l in yaml.safe_dump(w["post_actions"], sort_keys=False, allow_unicode=True,
+                                                             default_flow_style=False).rstrip().splitlines()]
+    if route.get("initial_pose"):
+        lines += ["initial_pose:"] + ["  " + l for l in yaml.safe_dump(route["initial_pose"], sort_keys=False,
+                                                                        default_flow_style=False).rstrip().splitlines()]
+    path.write_text("\n".join(lines) + "\n")
+
+
 # --------------------------------------------------------------------------- record
 def init_pose_from(path: str) -> tuple:
     """(x, y, yaw) from a route file's initial_pose (or its first waypoint)."""
@@ -370,7 +474,24 @@ def main() -> int:
     p = sub.add_parser("simplify", parents=[common], help="re-reduce an existing NAME.raw.yaml")
     p.add_argument("raw")
     p.add_argument("-o", "--out", default=None, help="route file to write (default: next to the raw file, .yaml)")
+    p = sub.add_parser("center", help="move unmarked waypoints to the middle of the free corridor on the map")
+    p.add_argument("route", help="a route .yaml (post_actions are kept)")
+    p.add_argument("--map", required=True, help="the nav2 map .yaml AMCL uses (its .pgm sits next to it)")
+    p.add_argument("--max-shift", type=float, default=0.6, help="largest move per waypoint, metres")
+    p.add_argument("--window", type=float, default=2.0, help="how far across the route to look for walls, metres")
+    p.add_argument("--max-width", type=float, default=3.0, help="wider free spans are open areas: left alone")
+    p.add_argument("-o", "--out", default=None, help="write here (default: overwrite the route file)")
     a = ap.parse_args()
+    if a.cmd == "center":
+        route = yaml.safe_load(open(a.route)) or {}
+        gm = GridMap(a.map)
+        moved = center_route(route, gm, a.max_shift, a.window, a.max_width)
+        out = Path(a.out) if a.out else Path(a.route)
+        header = [f"# {os.path.basename(a.route)}: unmarked waypoints centred in their corridor on "
+                  f"{os.path.basename(a.map)} by record_path.py center ({moved} moved, max shift {a.max_shift} m)."]
+        write_route(route, out, header)
+        print(f"{out}: {moved} waypoint(s) moved")
+        return 0
     if a.cmd == "record":
         init = None
         if a.init is not None:
