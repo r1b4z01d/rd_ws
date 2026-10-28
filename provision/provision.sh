@@ -130,6 +130,7 @@ phase_ros() {
 # --- Robot Disco (added by rd_ws/provision/provision.sh)
 source /opt/ros/humble/setup.bash
 [ -f "$HOME/rd_ws/install/setup.bash" ] && source "$HOME/rd_ws/install/setup.bash"
+export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/rd_ws/services/fastdds_no_shm.xml"   # UDP-only DDS, see services/fastdds_no_shm.xml
 export ROS_DOMAIN_ID=0
 BRC
   fi

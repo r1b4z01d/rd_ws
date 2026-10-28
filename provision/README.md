@@ -224,6 +224,15 @@ apt config again. The docker daemon does **not** use it, so bring the foxglove i
 (from the snapshot, or `docker build -t robotdisco/foxglove foxglove_studio/ && docker save ...` on a
 machine with internet) and pass `FOXGLOVE_IMAGE_TAR=`.
 
+## DDS transport
+
+Every ROS unit (and rd's shell) sets `FASTRTPS_DEFAULT_PROFILES_FILE=~/rd_ws/services/fastdds_no_shm.xml`:
+Fast DDS over UDPv4 only, no shared-memory transport. With the default SHM+UDP transport, a handful of
+unit restarts in one boot left stale `/dev/shm/fastrtps_*` segments and data silently stopped flowing
+between some processes (Nav2 lost the map frame, AMCL ignored the initial pose; 2026-10-27). If it ever
+happens again anyway: stop all ROS units, `rm /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*`, start them
+in order (base, localization, navigation, the rest), re-seed `/initialpose`.
+
 ## Known gaps / things to confirm against the snapshot
 
 - The vendored `foxglove_studio/` tree was missing its `packages/log` workspace because the top-level

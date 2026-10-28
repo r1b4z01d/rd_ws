@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fast DDS profile for every ROS process on the robot: UDPv4 transport ONLY, no shared-memory
+     transport. With the default SHM+UDP setup, after a few unit restarts in one boot (stale
+     /dev/shm/fastrtps_* segments) data silently stopped flowing between some participant pairs:
+     Nav2's controller lost the map frame, AMCL ignored /initialpose, a fresh node saw no TF
+     (2026-10-27/28, three times). Set through FASTRTPS_DEFAULT_PROFILES_FILE in each supervisor
+     unit (services/*.conf) and in rd's shell. UDP-only participants interoperate with SHM-enabled
+     ones, so mixing is harmless; on one host this all stays on loopback. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_only</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="udp_only_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_only</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>
