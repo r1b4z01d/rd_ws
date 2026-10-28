@@ -1,4 +1,4 @@
-# tigger.yaml: here_1 = the robot's pose (4.504, 2.069, -4 deg), between wp_2_1 and wp_2_2 (0.00 m off that leg); keeps the parked heading.
+# tigger.yaml: here_2 added at the robot's pose (5.959, 1.841, -2 deg) between wp_2_3 and wp_2_4 (0.36 m off that leg).
 waypoints:
   - name: Charger
     position: {x: 0.6957, y: 0.9208, z: 0.0}
@@ -24,6 +24,9 @@ waypoints:
   - name: wp_2_3
     position: {x: 5.6493, y: 2.1752, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: here_2
+    position: {x: 5.959, y: 1.841, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.019003, w: 0.999819}
   - name: wp_2_4
     position: {x: 6.6264, y: 2.2637, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
