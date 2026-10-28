@@ -4,6 +4,10 @@
     cd ~/rd_ws/Scripts && python3 route_editor.py           # then open http://192.168.11.80:8092/
     python3 route_editor.py --port 8092 --map ../src/robot_disco/maps/zone_one.yaml --no-ros
 
+Map view (`?view=map`, the manager's Map tab): the same map with the robot and both RPLiDAR scans
+(S1 yellow, S2E green) transformed into the map frame by this node — the first piece of the
+Foxglove-free robot console. /api/scans serves them; the page polls it a few times a second.
+
 What it does: draws the nav2 map (the same zone_one.yaml AMCL uses) with a 1 m grid, loads any route
 .yaml from this directory (and the matching .raw.yaml trace, greyed), shows the robot's live map pose,
 and edits the route: click on the map to add a waypoint after the selected one, drag to move, shift-drag
@@ -35,7 +39,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
 
-STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off"}
+STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}}
+SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan", "s2e": "/rp_s2e_lidar/scan"}   # drawn yellow / green on the map view
+SCAN_MAX_POINTS = 720
 
 
 # --------------------------------------------------------------------------- map
@@ -62,13 +68,54 @@ def ros_pose_thread() -> None:
         STATE["ros"] = f"no rclpy/tf2 ({type(e).__name__}): run with ROS sourced for the live pose"
         return
     try:
+        import numpy as np
+        from sensor_msgs.msg import LaserScan
+
         rclpy.init()
         node = Node("route_editor")
         buf = Buffer()
         TransformListener(buf, node)
+        latest: dict = {}
+
+        def _keep(name):
+            return lambda m: latest.__setitem__(name, m)
+
+        for name, topic in SCAN_TOPICS.items():
+            node.create_subscription(LaserScan, topic, _keep(name), 5)
+
+        def _scan_to_map(m) -> "list | None":
+            """One scan -> [[x, y], ...] in the map frame (latest TF), downsampled to SCAN_MAX_POINTS."""
+            try:
+                tf = buf.lookup_transform("map", m.header.frame_id, rclpy.time.Time())
+            except Exception:  # noqa: BLE001 — no TF for that lidar yet
+                return None
+            t, q = tf.transform.translation, tf.transform.rotation
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            r = np.asarray(m.ranges, dtype=float)
+            ang = m.angle_min + np.arange(len(r)) * m.angle_increment
+            ok = np.isfinite(r) & (r > max(0.05, m.range_min)) & (r < min(30.0, m.range_max or 30.0))
+            r, ang = r[ok], ang[ok]
+            if len(r) > SCAN_MAX_POINTS:
+                step = int(math.ceil(len(r) / SCAN_MAX_POINTS))
+                r, ang = r[::step], ang[::step]
+            px, py = r * np.cos(ang), r * np.sin(ang)
+            mx = t.x + px * math.cos(yaw) - py * math.sin(yaw)
+            my = t.y + px * math.sin(yaw) + py * math.cos(yaw)
+            return np.round(np.stack([mx, my], 1), 3).tolist()
+
+        last_scan_pub = 0.0
         STATE["ros"] = "waiting for TF map->base_footprint"
         while True:
             rclpy.spin_once(node, timeout_sec=0.2)
+            now_t = time.time()
+            if now_t - last_scan_pub > 0.2:      # ~5 Hz is plenty for a browser
+                last_scan_pub = now_t
+                scans = {}
+                for name, m in list(latest.items()):
+                    pts = _scan_to_map(m)
+                    if pts is not None:
+                        scans[name] = {"points": pts, "frame": m.header.frame_id, "topic": SCAN_TOPICS[name], "t": now_t}
+                STATE["scans"] = scans
             try:
                 tf = buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
                 t, q = tf.transform.translation, tf.transform.rotation
@@ -185,6 +232,10 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
                 self._json({"pose": fresh, "ros": STATE["ros"]})
+            elif u.path == "/api/scans":
+                now = time.time()
+                self._json({"scans": {k: v for k, v in STATE["scans"].items() if now - v["t"] < 3.0},
+                            "topics": SCAN_TOPICS, "ros": STATE["ros"]})
             else:
                 self._send(404, b"not found", "text/plain")
         except Exception as e:  # noqa: BLE001

@@ -30,35 +30,49 @@
   #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none; }
   #help { position: absolute; right: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 420px; }
   label.cb { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+  .modes button { padding: 4px 10px; } .modes button + button { margin-left: 4px; }
+  body.map-mode .edit-only { display: none !important; }
+  #legend { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; display: none; }
+  body.map-mode #legend { display: block; } body.map-mode #help { display: none; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
 <div id="side">
-  <h1>Route editor</h1>
-  <div class="row">
+  <div class="row" style="justify-content:space-between">
+    <h1 id="title">Route editor</h1>
+    <span class="modes"><button id="mode-edit" class="accent">Edit</button><button id="mode-map">Map</button></span>
+  </div>
+  <div class="row edit-only">
     <select id="routes" title="route file in Scripts/"></select>
     <button id="load">Load</button>
     <button id="new">New</button>
   </div>
-  <div class="row">
+  <div class="row edit-only">
     <input id="savename" placeholder="save as (name)" style="flex:1">
     <button id="save" class="ok">Save</button>
   </div>
-  <div class="row">
+  <div class="row edit-only">
     <button id="addrobot" title="add a waypoint at the robot's live pose">+ at robot</button>
     <label class="cb"><input type="checkbox" id="clickadd" checked> click adds</label>
     <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
   </div>
-  <div class="row">
+  <div class="row" id="layers">
+    <label class="cb"><input type="checkbox" id="showscans"> lidar scans</label>
+    <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
+    <span class="muted" id="scaninfo"></span>
+  </div>
+  <div class="row edit-only">
     <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
     <button id="redo" title="redo (Ctrl/⌘+Shift+Z or Ctrl+Y)">↷ redo</button>
     <span class="muted" id="histinfo"></span>
   </div>
-  <div class="row">
+  <div class="row edit-only">
     <button id="center" title="record_path.py center: unmarked waypoints to the middle of their corridor (on the saved file)">centre</button>
     <button id="densify" title="record_path.py densify: intermediate waypoints on long legs (on the saved file)">densify</button>
     <input id="spacing" type="number" step="0.1" value="1.0" title="densify spacing, m">
   </div>
+  <div class="edit-only">
   <h3>Waypoints <span class="muted" id="count"></span></h3>
   <div id="list"></div>
   <h3>Selected</h3>
@@ -78,10 +92,12 @@
   <textarea id="wactions" placeholder="- vla: tigger_1_merged_smolvla_1&#10;  task: Grab and hold tigger&#10;  done: closed&#10;  keep_grasp: true"></textarea>
   <h3>Output</h3>
   <pre id="out"></pre>
+  </div><!-- /edit-only -->
 </div>
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
+  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E &nbsp; <span class="sw" style="background:#4f8cff"></span>route</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script>
@@ -90,6 +106,18 @@ const canvas = $("#c"), ctx = canvas.getContext("2d");
 let MAP = null, img = new Image(), route = {name: "", waypoints: [], initial_pose: null, raw_trace: []};
 let sel = -1, pose = null, rosStatus = "";
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
+let mode = new URLSearchParams(location.search).get("view") === "map" ? "map" : "edit";
+let scans = {};                                 // name -> {points: [[x,y],...], t}
+const SCAN_COLORS = {s1: "#f5d033", s2e: "#39d353"};
+function setMode(m) {
+  mode = m; document.body.classList.toggle("map-mode", m === "map");
+  $("#mode-edit").classList.toggle("accent", m === "edit"); $("#mode-map").classList.toggle("accent", m === "map");
+  $("#title").textContent = m === "map" ? "Map" : "Route editor";
+  if (m === "map") { $("#showscans").checked = true; $("#showroute").checked = false; sel = -1; }
+  else { $("#showroute").checked = true; }
+  const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); history.replaceState(null, "", u);
+  renderList(); draw();
+}
 let drag = null;                               // {kind: 'pan'|'move'|'yaw', ...}
 let dirty = false;
 // undo / redo: snapshots of the waypoints (+ initial pose) taken BEFORE each change; a drag is one step
@@ -134,8 +162,15 @@ function draw() {
     ctx.strokeStyle = "rgba(200,200,200,.5)"; ctx.lineWidth = 2; ctx.beginPath();
     route.raw_trace.forEach((p, i) => { const [a, b] = w2c(p[0], p[1]); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke();
   }
+  // lidar scans (map frame, from /api/scans)
+  if ($("#showscans").checked) {
+    for (const [name, sc] of Object.entries(scans)) {
+      ctx.fillStyle = SCAN_COLORS[name] || "#fff"; const r2 = Math.max(1.2, view.scale * 0.6);
+      for (const p of sc.points) { const [a, b] = w2c(p[0], p[1]); ctx.fillRect(a - r2 / 2, b - r2 / 2, r2, r2); }
+    }
+  }
   // route polyline
-  const W = route.waypoints;
+  const W = $("#showroute").checked ? route.waypoints : [];
   if (W.length > 1) { ctx.strokeStyle = "#4f8cff"; ctx.lineWidth = 2.5; ctx.beginPath(); W.forEach((w, i) => { const [a, b] = w2c(w.x, w.y); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke(); }
   W.forEach((w, i) => {
     const [a, b] = w2c(w.x, w.y); const marked = isMarked(w); const col = marked ? "#e04848" : "#4f8cff";
@@ -207,7 +242,7 @@ canvas.addEventListener("wheel", e => {
   const f = e.deltaY < 0 ? 1.15 : 1 / 1.15; view.tx = cx - (cx - view.tx) * f; view.ty = cy - (cy - view.ty) * f; view.scale *= f; draw();
 }, {passive: false});
 canvas.addEventListener("mousedown", e => {
-  const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top; const i = hit(cx, cy);
+  const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top; const i = mode === "edit" ? hit(cx, cy) : -1;
   if (i >= 0) { select(i); pushHistory(); drag = {kind: e.shiftKey ? "yaw" : "move", i, moved: false}; }
   else drag = {kind: "pan", x0: cx, y0: cy, tx: view.tx, ty: view.ty, moved: false};
 });
@@ -219,7 +254,7 @@ window.addEventListener("mousemove", e => {
 });
 window.addEventListener("mouseup", e => {
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
-  if (drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
+  if (mode === "edit" && drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
   if ((drag.kind === "move" || drag.kind === "yaw") && !drag.moved) { history.pop(); histInfo(); }
   drag = null;
 });
@@ -264,12 +299,26 @@ function setRoute(d, keepHistory) { route = d; route.raw_trace = d.raw_trace || 
 async function loadRoute(name) { const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then(r => r.json()); if (d.error) { out(d.error); return; } setRoute(d); out(`loaded ${name}.yaml: ${d.waypoints.length} waypoints`); }
 async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
 async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+async function pollScans() {
+  if ($("#showscans").checked) {
+    try {
+      const d = await fetch("/api/scans").then(r => r.json()); scans = d.scans || {};
+      const names = Object.keys(scans); $("#scaninfo").textContent = names.length ? names.map(n => `${n}: ${scans[n].points.length} pts`).join(" · ") : "no scans (lidars / TF?)";
+    } catch (e) { scans = {}; }
+    draw();
+  }
+  setTimeout(pollScans, 200);
+}
+$("#showscans").onchange = () => { if (!$("#showscans").checked) { scans = {}; $("#scaninfo").textContent = ""; } draw(); };
+$("#showroute").onchange = draw;
+$("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => setMode("map");
 (async () => {
   MAP = await fetch("/api/map").then(r => r.json());
   img.onload = () => { resize(); fit(); draw(); }; img.src = MAP.image;
   await loadRoutes();
   const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
-  poll();
+  setMode(mode);
+  poll(); pollScans();
 })();
 window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 </script>
