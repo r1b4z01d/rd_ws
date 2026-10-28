@@ -1073,7 +1073,10 @@ with a 1 m grid, the robot's live pose (green) and any route from `Scripts/` wit
 heading, type a name, a `pause` (seconds to stop there) and `post_actions` (YAML) in the side panel, reorder or delete, **+ at robot** adds
 a waypoint at the robot's pose. **Save** writes `<name>.yaml` in `path.py`'s format and runs
 `path.py --check` on it; **centre** and **densify** run `record_path.py`'s tools on the saved file.
-Named (red) waypoints keep their heading; `wp_…` points face the next one.
+Named (red) waypoints keep their heading; `wp_…` points face the next one. **Map** mode (the `Map`
+button, or `?view=map`, the manager's Map tab) is the same page without editing: the map, the robot and
+both RPLiDAR scans live (S1 yellow, S2E green, transformed into the map frame by the editor's node and
+served at `/api/scans` ~5 Hz); the `lidar scans` / `route` layer checkboxes work in both modes.
 
 ### Recording a route by driving (`Scripts/record_path.py`)
 
