@@ -45,6 +45,11 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
 # the driver output, --scan-topics name=topic,... for anything else).
 SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan_filtered", "s2e": "/rp_s2e_lidar/scan_filtered"}
 RAW_SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan", "s2e": "/rp_s2e_lidar/scan"}
+# The Velodyne as a top-down projection of its point cloud, keeping the height band the costmaps mark
+# (0.1-2.0 m above the floor): this is the layer that painted the phantom wall on 2026-10-27.
+CLOUD_TOPICS = {"velodyne": "/velodyne_points"}
+CLOUD_Z = (0.1, 2.0)
+CLOUD_MAX_POINTS = 2500
 SCAN_MAX_POINTS = 720
 
 
@@ -73,7 +78,9 @@ def ros_pose_thread() -> None:
         return
     try:
         import numpy as np
-        from sensor_msgs.msg import LaserScan
+        from rclpy.qos import qos_profile_sensor_data
+        from sensor_msgs.msg import LaserScan, PointCloud2
+        from sensor_msgs_py import point_cloud2 as pc2
 
         rclpy.init()
         node = Node("route_editor")
@@ -84,8 +91,35 @@ def ros_pose_thread() -> None:
         def _keep(name):
             return lambda m: latest.__setitem__(name, m)
 
+        # sensor QoS (best effort) matches both the reliable driver output and the best-effort filter
+        # chain output; a reliable subscriber silently never matched /rp_*_lidar/scan_filtered
         for name, topic in SCAN_TOPICS.items():
-            node.create_subscription(LaserScan, topic, _keep(name), 5)
+            node.create_subscription(LaserScan, topic, _keep(name), qos_profile_sensor_data)
+        for name, topic in CLOUD_TOPICS.items():
+            node.create_subscription(PointCloud2, topic, _keep(name), qos_profile_sensor_data)
+
+        def _tf2d(frame):
+            tf = buf.lookup_transform("map", frame, rclpy.time.Time())
+            t, q = tf.transform.translation, tf.transform.rotation
+            return t.x, t.y, t.z, math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+        def _cloud_to_map(m) -> "list | None":
+            try:
+                tx, ty, tz, yaw = _tf2d(m.header.frame_id)
+            except Exception:  # noqa: BLE001
+                return None
+            pts = pc2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True)
+            if len(pts) == 0:
+                return []
+            z = pts[:, 2] + tz
+            keep = (z > CLOUD_Z[0]) & (z < CLOUD_Z[1])
+            pts = pts[keep]
+            if len(pts) > CLOUD_MAX_POINTS:
+                pts = pts[:: int(math.ceil(len(pts) / CLOUD_MAX_POINTS))]
+            c, s_ = math.cos(yaw), math.sin(yaw)
+            mx = tx + pts[:, 0] * c - pts[:, 1] * s_
+            my = ty + pts[:, 0] * s_ + pts[:, 1] * c
+            return np.round(np.stack([mx, my], 1), 3).tolist()
 
         def _scan_to_map(m) -> "list | None":
             """One scan -> [[x, y], ...] in the map frame (latest TF), downsampled to SCAN_MAX_POINTS."""
@@ -114,11 +148,20 @@ def ros_pose_thread() -> None:
             now_t = time.time()
             if now_t - last_scan_pub > 0.2:      # ~5 Hz is plenty for a browser
                 last_scan_pub = now_t
-                scans = {}
+                want = STATE.get("want") or {}
+                wanted = set(want.get("names") or []) if now_t - want.get("t", 0) < 3.0 else set()
+                scans = dict(STATE["scans"])
                 for name, m in list(latest.items()):
-                    pts = _scan_to_map(m)
+                    if name in CLOUD_TOPICS:
+                        if name not in wanted:            # the cloud is the expensive one: only when shown
+                            continue
+                        pts = _cloud_to_map(m)
+                        topic = CLOUD_TOPICS[name]
+                    else:
+                        pts = _scan_to_map(m)
+                        topic = SCAN_TOPICS[name]
                     if pts is not None:
-                        scans[name] = {"points": pts, "frame": m.header.frame_id, "topic": SCAN_TOPICS[name], "t": now_t}
+                        scans[name] = {"points": pts, "frame": m.header.frame_id, "topic": topic, "t": now_t}
                 STATE["scans"] = scans
             try:
                 tf = buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
@@ -238,8 +281,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"pose": fresh, "ros": STATE["ros"]})
             elif u.path == "/api/scans":
                 now = time.time()
-                self._json({"scans": {k: v for k, v in STATE["scans"].items() if now - v["t"] < 3.0},
-                            "topics": SCAN_TOPICS, "ros": STATE["ros"]})
+                names = [n for n in (q.get("layers") or "").split(",") if n]
+                STATE["want"] = {"names": names or list(SCAN_TOPICS) + list(CLOUD_TOPICS), "t": now}
+                self._json({"scans": {k: v for k, v in STATE["scans"].items()
+                                      if now - v["t"] < 3.0 and (not names or k in names)},
+                            "topics": {**SCAN_TOPICS, **CLOUD_TOPICS}, "ros": STATE["ros"]})
             else:
                 self._send(404, b"not found", "text/plain")
         except Exception as e:  # noqa: BLE001

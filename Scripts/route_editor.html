@@ -58,10 +58,12 @@
     <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
   </div>
   <div class="row" id="layers">
-    <label class="cb"><input type="checkbox" id="showscans"> lidar scans</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="s1"><span class="sw" style="background:#f5d033"></span>S1</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="s2e"><span class="sw" style="background:#39d353"></span>S2E</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="velodyne"><span class="sw" style="background:#e85cff"></span>Velodyne</label>
     <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
-    <span class="muted" id="scaninfo"></span>
   </div>
+  <div class="muted" id="scaninfo" style="font-size:11px"></div>
   <div class="row edit-only">
     <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
     <button id="redo" title="redo (Ctrl/⌘+Shift+Z or Ctrl+Y)">↷ redo</button>
@@ -97,7 +99,7 @@
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
-  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#4f8cff"></span>route</div>
+  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script>
@@ -108,12 +110,14 @@ let sel = -1, pose = null, rosStatus = "";
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
 let mode = new URLSearchParams(location.search).get("view") === "map" ? "map" : "edit";
 let scans = {};                                 // name -> {points: [[x,y],...], t}
-const SCAN_COLORS = {s1: "#f5d033", s2e: "#39d353"};
+const SCAN_COLORS = {s1: "#f5d033", s2e: "#39d353", velodyne: "#e85cff"};
+const layersOn = () => [...document.querySelectorAll("input.layer")].filter(c => c.checked).map(c => c.dataset.layer);
 function setMode(m) {
   mode = m; document.body.classList.toggle("map-mode", m === "map");
   $("#mode-edit").classList.toggle("accent", m === "edit"); $("#mode-map").classList.toggle("accent", m === "map");
   $("#title").textContent = m === "map" ? "Map" : "Route editor";
-  if (m === "map") { $("#showscans").checked = true; $("#showroute").checked = false; sel = -1; }
+  document.querySelectorAll("input.layer").forEach(c => { c.checked = m === "map"; });
+  if (m === "map") { $("#showroute").checked = false; sel = -1; }
   else { $("#showroute").checked = true; }
   const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); history.replaceState(null, "", u);
   renderList(); draw();
@@ -162,12 +166,12 @@ function draw() {
     ctx.strokeStyle = "rgba(200,200,200,.5)"; ctx.lineWidth = 2; ctx.beginPath();
     route.raw_trace.forEach((p, i) => { const [a, b] = w2c(p[0], p[1]); i ? ctx.lineTo(a, b) : ctx.moveTo(a, b); }); ctx.stroke();
   }
-  // lidar scans (map frame, from /api/scans)
-  if ($("#showscans").checked) {
-    for (const [name, sc] of Object.entries(scans)) {
-      ctx.fillStyle = SCAN_COLORS[name] || "#fff"; const r2 = Math.max(1.2, view.scale * 0.6);
-      for (const p of sc.points) { const [a, b] = w2c(p[0], p[1]); ctx.fillRect(a - r2 / 2, b - r2 / 2, r2, r2); }
-    }
+  // sensor layers (map frame, from /api/scans), each behind its own checkbox
+  const on = new Set(layersOn());
+  for (const [name, sc] of Object.entries(scans)) {
+    if (!on.has(name)) continue;
+    ctx.fillStyle = SCAN_COLORS[name] || "#fff"; const r2 = Math.max(1.2, view.scale * (name === "velodyne" ? 0.45 : 0.6));
+    for (const p of sc.points) { const [a, b] = w2c(p[0], p[1]); ctx.fillRect(a - r2 / 2, b - r2 / 2, r2, r2); }
   }
   // route polyline
   const W = $("#showroute").checked ? route.waypoints : [];
@@ -300,16 +304,17 @@ async function loadRoute(name) { const d = await fetch(`/api/route?name=${encode
 async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
 async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
 async function pollScans() {
-  if ($("#showscans").checked) {
+  const want = layersOn();
+  if (want.length) {
     try {
-      const d = await fetch("/api/scans").then(r => r.json()); scans = d.scans || {};
-      const names = Object.keys(scans); $("#scaninfo").textContent = names.length ? names.map(n => `${n}: ${scans[n].points.length} pts`).join(" · ") : "no scans (lidars / TF?)";
+      const d = await fetch("/api/scans?layers=" + want.join(",")).then(r => r.json()); scans = d.scans || {};
+      $("#scaninfo").textContent = want.map(n => `${n}: ${scans[n] ? scans[n].points.length + " pts" : "no data"}`).join(" · ");
     } catch (e) { scans = {}; }
     draw();
-  }
+  } else if (Object.keys(scans).length) { scans = {}; $("#scaninfo").textContent = ""; draw(); }
   setTimeout(pollScans, 200);
 }
-$("#showscans").onchange = () => { if (!$("#showscans").checked) { scans = {}; $("#scaninfo").textContent = ""; } draw(); };
+document.querySelectorAll("input.layer").forEach(c => c.onchange = draw);
 $("#showroute").onchange = draw;
 $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => setMode("map");
 (async () => {
