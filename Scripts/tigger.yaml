@@ -1,4 +1,4 @@
-# tigger.yaml: here_3 added at the robot's pose (7.163, 1.914, 4 deg) between wp_2_4 and wp_3 (0.40 m off that leg).
+# tigger.yaml: 'dining room' added at the robot's pose (7.784, 2.521, 86 deg) between wp_3 and x_1 (0.02 m off that leg); a named (marked) pose.
 waypoints:
   - name: Charger
     position: {x: 0.6957, y: 0.9208, z: 0.0}
@@ -36,6 +36,9 @@ waypoints:
   - name: wp_3
     position: {x: 7.6035, y: 2.3522, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.322233, w: 0.946661}
+  - name: dining room
+    position: {x: 7.784, y: 2.521, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.681988, w: 0.731364}
   - name: x_1
     position: {x: 8.25, y: 2.85, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.687354, w: 0.726322}
