@@ -1,4 +1,6 @@
-# tigger.yaml: unmarked waypoints centred in their corridor on zone_one.yaml by record_path.py center (5 moved, max shift 0.6 m).
+# tigger.yaml: wp_4 moved to the first yellow X (8.25, 2.85; it was 8.2241, 2.9149) and renamed x_1, x_2 added at the
+# second X (8.33, 4.3) — positions taken from the Foxglove screenshot of 2026-10-27 by fitting the drawn route (±10 cm).
+# Unmarked waypoints were centred in their corridor on zone_one.yaml before that; marked poses are untouched.
 waypoints:
   - name: Charger
     position: {x: 0.6957, y: 0.9208, z: 0.0}
@@ -11,10 +13,13 @@ waypoints:
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
   - name: wp_3
     position: {x: 7.6035, y: 2.3522, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.359986, w: 0.932958}
-  - name: wp_4
-    position: {x: 8.2241, y: 2.9149, z: 0.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.696458, w: 0.717598}
+    orientation: {x: 0.0, y: 0.0, z: 0.322233, w: 0.946661}
+  - name: x_1
+    position: {x: 8.25, y: 2.85, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.687354, w: 0.726322}
+  - name: x_2
+    position: {x: 8.33, y: 4.3, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.765867, w: 0.642999}
   - name: wp_5
     position: {x: 8.2749, y: 4.6135, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.697904, w: 0.716192}
