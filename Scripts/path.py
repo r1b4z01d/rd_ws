@@ -2,6 +2,7 @@
 """Waypoint runner: drive a route from a YAML file with Nav2 and run each waypoint's post_actions.
 
     cd ~/rd_ws/Scripts && python3 path.py [route.yaml]      # default: waypoints.yaml next to this file
+    python3 path.py route.yaml --from wp_2                  # start the route at that waypoint (skip the earlier ones)
     ros2 service call /start_waypoints std_srvs/srv/Trigger {}
     python3 path.py --check route.yaml                      # parse, print the segments and commands, no ROS
 
@@ -234,7 +235,17 @@ def check(path: Path) -> int:
 
 
 def main() -> None:
-    args = [a for a in sys.argv[1:] if not a.startswith("--ros-args") and a != "--no-deadman-stop"]
+    start_from = None
+    argv = [a for a in sys.argv[1:] if not a.startswith("--ros-args") and a != "--no-deadman-stop"]
+    args = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--from" and i + 1 < len(argv):
+            start_from = argv[i + 1]
+            i += 2
+            continue
+        args.append(argv[i])
+        i += 1
     if args and args[0] == "--check":
         sys.exit(check(Path(args[1]) if len(args) > 1 else Path(__file__).with_name("waypoints.yaml")))
     route_path = Path(args[0]) if args else Path(__file__).with_name("waypoints.yaml")
@@ -275,6 +286,15 @@ def main() -> None:
     navigator.waitUntilNav2Active()
 
     waypoints, initial = load_route(route_path)
+    if start_from is not None:
+        names = [w.name for w in waypoints]
+        if start_from not in names:
+            logger.error(f"--from {start_from!r}: no such waypoint; have {names}")
+            rclpy.shutdown()
+            return
+        skipped = names[:names.index(start_from)]
+        waypoints = waypoints[names.index(start_from):]
+        logger.info(f"--from {start_from}: skipping {skipped}")
     poses = [pose_of(wp) for wp in waypoints]
     segs = segments(waypoints)
     logger.info(f"Loaded {len(waypoints)} waypoints from {route_path}: {', '.join(w.name for w in waypoints)}")
