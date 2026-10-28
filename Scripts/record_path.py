@@ -265,10 +265,17 @@ def record(name: str, out_dir: Path, rate: float, source: str, base_frame: str, 
         msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = q["z"], q["w"]
         msg.pose.covariance[0] = msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.07
-        for _ in range(3):
+        # Wait until AMCL's subscription is matched: a fresh publisher's first messages are dropped
+        # until DDS discovery completes (seen 2026-10-27: three quick publishes, AMCL never got them).
+        t_wait = time.time()
+        while pub.get_subscription_count() < 1 and time.time() - t_wait < 15.0:
+            rclpy.spin_once(node, timeout_sec=0.2)
+        if pub.get_subscription_count() < 1:
+            print("[record] WARNING: nothing subscribes to /initialpose (is robot_disco_localization running?)", flush=True)
+        for _ in range(6):
             msg.header.stamp = node.get_clock().now().to_msg()
             pub.publish(msg)
-            rclpy.spin_once(node, timeout_sec=0.3)
+            rclpy.spin_once(node, timeout_sec=0.5)
         print(f"[record] initial pose published: ({ix:.2f}, {iy:.2f}) {math.degrees(iyaw):.0f}° — the robot must be there",
               flush=True)
 
