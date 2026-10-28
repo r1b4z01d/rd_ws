@@ -39,7 +39,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
 
-STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}}
+STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}, "costmaps": {}}
+COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
 # the driver output, --scan-topics name=topic,... for anything else).
@@ -97,6 +98,21 @@ def ros_pose_thread() -> None:
             node.create_subscription(LaserScan, topic, _keep(name), qos_profile_sensor_data)
         for name, topic in CLOUD_TOPICS.items():
             node.create_subscription(PointCloud2, topic, _keep(name), qos_profile_sensor_data)
+        # costmaps: nav2 publishes them latched (transient local); keep the latest message, render on demand
+        from nav_msgs.msg import OccupancyGrid
+        from rclpy.qos import QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+        cm_qos = QoSProfile(depth=1)
+        cm_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        cm_qos.reliability = ReliabilityPolicy.RELIABLE
+
+        def _keep_costmap(name):
+            def cb(m):
+                STATE["costmaps"][name] = {"msg": m, "t": time.time()}
+            return cb
+
+        for name, topic in COSTMAP_TOPICS.items():
+            node.create_subscription(OccupancyGrid, topic, _keep_costmap(name), cm_qos)
 
         def _tf2d(frame):
             tf = buf.lookup_transform("map", frame, rclpy.time.Time())
@@ -108,9 +124,12 @@ def ros_pose_thread() -> None:
                 tx, ty, tz, yaw = _tf2d(m.header.frame_id)
             except Exception:  # noqa: BLE001
                 return None
-            pts = pc2.read_points_numpy(m, field_names=("x", "y", "z"), skip_nans=True)
-            if len(pts) == 0:
+            # read_points (not read_points_numpy): the Velodyne cloud mixes float32 x/y/z with other
+            # field types, which the numpy reader refuses ("All fields need to have the same datatype")
+            arr = pc2.read_points(m, field_names=("x", "y", "z"), skip_nans=True)
+            if len(arr) == 0:
                 return []
+            pts = np.stack([arr["x"], arr["y"], arr["z"]], 1).astype(float)
             z = pts[:, 2] + tz
             keep = (z > CLOUD_Z[0]) & (z < CLOUD_Z[1])
             pts = pts[keep]
@@ -152,14 +171,18 @@ def ros_pose_thread() -> None:
                 wanted = set(want.get("names") or []) if now_t - want.get("t", 0) < 3.0 else set()
                 scans = dict(STATE["scans"])
                 for name, m in list(latest.items()):
-                    if name in CLOUD_TOPICS:
-                        if name not in wanted:            # the cloud is the expensive one: only when shown
-                            continue
-                        pts = _cloud_to_map(m)
-                        topic = CLOUD_TOPICS[name]
-                    else:
-                        pts = _scan_to_map(m)
-                        topic = SCAN_TOPICS[name]
+                    try:
+                        if name in CLOUD_TOPICS:
+                            if name not in wanted:        # the cloud is the expensive one: only when shown
+                                continue
+                            pts = _cloud_to_map(m)
+                            topic = CLOUD_TOPICS[name]
+                        else:
+                            pts = _scan_to_map(m)
+                            topic = SCAN_TOPICS[name]
+                    except Exception as e:  # noqa: BLE001 — one bad message must not kill the node
+                        STATE["ros"] = f"{name}: {type(e).__name__}: {str(e)[:80]}"
+                        continue
                     if pts is not None:
                         scans[name] = {"points": pts, "frame": m.header.frame_id, "topic": topic, "t": now_t}
                 STATE["scans"] = scans
@@ -176,6 +199,44 @@ def ros_pose_thread() -> None:
             time.sleep(0.1)
     except Exception as e:  # noqa: BLE001
         STATE["ros"] = f"ros thread died: {e}"
+
+
+# --------------------------------------------------------------------------- costmap rendering
+_cm_cache: dict = {}   # name -> {"stamp": (sec, nsec), "png": bytes, "meta": dict}
+
+
+def costmap_png(name: str) -> "tuple[bytes, dict] | None":
+    """The latest costmap as a transparent PNG (free / unknown clear; inflation yellow->orange, inscribed
+    orange, lethal red) plus its georeference. Rendered once per new message."""
+    import numpy as np
+    from PIL import Image
+
+    entry = STATE["costmaps"].get(name)
+    if not entry:
+        return None
+    m = entry["msg"]
+    st = (m.header.stamp.sec, m.header.stamp.nanosec, m.info.width, m.info.height)
+    c = _cm_cache.get(name)
+    if c and c["stamp"] == st:
+        return c["png"], c["meta"]
+    w, h = m.info.width, m.info.height
+    d = np.array(m.data, dtype=np.int16).reshape(h, w)
+    rgba = np.zeros((h, w, 4), np.uint8)
+    g = (d > 0) & (d < 99)
+    rgba[g, 0] = 255
+    rgba[g, 1] = (255 - d[g] * 2).clip(60, 255)
+    rgba[g, 2] = 0
+    rgba[g, 3] = 255
+    rgba[d == 99] = (255, 120, 0, 255)
+    rgba[d == 100] = (200, 0, 0, 255)
+    buf = io.BytesIO()
+    Image.fromarray(rgba[::-1]).save(buf, "PNG")      # row 0 of the grid is the bottom
+    meta = {"name": name, "topic": COSTMAP_TOPICS[name], "resolution": float(m.info.resolution),
+            "origin": [float(m.info.origin.position.x), float(m.info.origin.position.y)],
+            "width": w, "height": h, "stamp": f"{st[0]}.{st[1]:09d}", "age_s": round(time.time() - entry["t"], 1),
+            "image": f"/costmap/{name}.png?v={st[0]}.{st[1]}"}
+    _cm_cache[name] = {"stamp": st, "png": buf.getvalue(), "meta": meta}
+    return _cm_cache[name]["png"], meta
 
 
 # --------------------------------------------------------------------------- routes
@@ -279,6 +340,15 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
                 self._json({"pose": fresh, "ros": STATE["ros"]})
+            elif u.path == "/api/costmap":
+                r = costmap_png(q.get("name", "global"))
+                self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
+            elif u.path.startswith("/costmap/") and u.path.endswith(".png"):
+                r = costmap_png(u.path[len("/costmap/"):-4])
+                if r:
+                    self._send(200, r[0], "image/png")
+                else:
+                    self._send(404, b"no costmap", "text/plain")
             elif u.path == "/api/scans":
                 now = time.time()
                 names = [n for n in (q.get("layers") or "").split(",") if n]

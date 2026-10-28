@@ -63,6 +63,11 @@
     <label class="cb"><input type="checkbox" class="layer" data-layer="velodyne"><span class="sw" style="background:#e85cff"></span>Velodyne</label>
     <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
   </div>
+  <div class="row" id="costmaps">
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"> global costmap</label>
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"> local costmap</label>
+    <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="25" style="width:60px">%</label>
+  </div>
   <div class="muted" id="scaninfo" style="font-size:11px"></div>
   <div class="row edit-only">
     <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
@@ -99,7 +104,7 @@
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
-  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route</div>
+  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; costmap: <span class="sw" style="background:#ffd700"></span>inflated <span class="sw" style="background:#ff7800"></span>inscribed <span class="sw" style="background:#c80000"></span>lethal</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script>
@@ -110,6 +115,8 @@ let sel = -1, pose = null, rosStatus = "";
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
 let mode = new URLSearchParams(location.search).get("view") === "map" ? "map" : "edit";
 let scans = {};                                 // name -> {points: [[x,y],...], t}
+let costmaps = {};                              // name -> {meta, img}
+const cmOn = () => [...document.querySelectorAll("input.cmlayer")].filter(c => c.checked).map(c => c.dataset.cm);
 const SCAN_COLORS = {s1: "#f5d033", s2e: "#39d353", velodyne: "#e85cff"};
 const layersOn = () => [...document.querySelectorAll("input.layer")].filter(c => c.checked).map(c => c.dataset.layer);
 function setMode(m) {
@@ -117,6 +124,7 @@ function setMode(m) {
   $("#mode-edit").classList.toggle("accent", m === "edit"); $("#mode-map").classList.toggle("accent", m === "map");
   $("#title").textContent = m === "map" ? "Map" : "Route editor";
   document.querySelectorAll("input.layer").forEach(c => { c.checked = m === "map"; });
+  document.querySelectorAll("input.cmlayer").forEach(c => { c.checked = m === "map" && c.dataset.cm === "global"; });
   if (m === "map") { $("#showroute").checked = false; sel = -1; }
   else { $("#showroute").checked = true; }
   const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); history.replaceState(null, "", u);
@@ -155,6 +163,15 @@ function draw() {
   ctx.clearRect(0, 0, r.width, r.height);
   ctx.imageSmoothingEnabled = view.scale < 2;
   ctx.drawImage(img, view.tx, view.ty, MAP.width * view.scale, MAP.height * view.scale);
+  // costmap overlays (between the map and everything live), at the chosen opacity
+  const cmSel = new Set(cmOn());
+  for (const [name, cm] of Object.entries(costmaps)) {
+    if (!cmSel.has(name) || !cm.img || !cm.img.complete || !cm.meta) continue;
+    const M = cm.meta; const [a, b] = w2c(M.origin[0], M.origin[1] + M.height * M.resolution);   // top-left corner
+    ctx.globalAlpha = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 25) / 100));
+    ctx.drawImage(cm.img, a, b, M.width * M.resolution / MAP.resolution * view.scale, M.height * M.resolution / MAP.resolution * view.scale);
+    ctx.globalAlpha = 1;
+  }
   // 1 m grid
   const gx0 = Math.floor(MAP.origin[0]), gx1 = Math.ceil(MAP.origin[0] + MAP.width * MAP.resolution);
   const gy0 = Math.floor(MAP.origin[1]), gy1 = Math.ceil(MAP.origin[1] + MAP.height * MAP.resolution);
@@ -315,6 +332,22 @@ async function pollScans() {
   setTimeout(pollScans, 200);
 }
 document.querySelectorAll("input.layer").forEach(c => c.onchange = draw);
+async function pollCostmaps() {
+  for (const name of cmOn()) {
+    try {
+      const meta = await fetch(`/api/costmap?name=${name}`).then(r => r.json());
+      if (meta.error) { costmaps[name] = {meta: null, err: meta.error}; continue; }
+      const cur = costmaps[name];
+      if (!cur || !cur.meta || cur.meta.stamp !== meta.stamp) {
+        const img = new Image(); img.onload = draw; img.src = meta.image; costmaps[name] = {meta, img};
+      }
+    } catch (e) { /* keep the last one */ }
+  }
+  for (const name of Object.keys(costmaps)) if (!cmOn().includes(name)) delete costmaps[name];
+  draw();
+  setTimeout(pollCostmaps, 1000);
+}
+document.querySelectorAll("input.cmlayer").forEach(c => c.onchange = draw); $("#cmalpha").onchange = draw;
 $("#showroute").onchange = draw;
 $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => setMode("map");
 (async () => {
@@ -323,7 +356,7 @@ $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => 
   await loadRoutes();
   const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
   setMode(mode);
-  poll(); pollScans();
+  poll(); pollScans(); pollCostmaps();
 })();
 window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 </script>
