@@ -1070,7 +1070,7 @@ Detections are published on `/apriltag/apriltag_detections` and as TF frames (`<
 `http://192.168.11.80:8092/` (supervisor unit `robot_disco_route_editor`, autostarts) shows the nav2 map
 with a 1 m grid, the robot's live pose (green) and any route from `Scripts/` with its recorded trace
 (grey). Click the map to add a waypoint after the selected one, drag to move it, shift-drag to turn its
-heading, type a name and `post_actions` (YAML) in the side panel, reorder or delete, **+ at robot** adds
+heading, type a name, a `pause` (seconds to stop there) and `post_actions` (YAML) in the side panel, reorder or delete, **+ at robot** adds
 a waypoint at the robot's pose. **Save** writes `<name>.yaml` in `path.py`'s format and runs
 `path.py --check` on it; **centre** and **densify** run `record_path.py`'s tools on the saved file.
 Named (red) waypoints keep their heading; `wp_…` points face the next one.
@@ -1124,6 +1124,7 @@ waypoints:
   - name: charger
     position: {x: 2.99, y: 1.99, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: -0.004, w: 1.0}   # always give a full quaternion; a missing w defaults to 0
+    pause: 5                                               # optional: stop here 5 s before the actions run
     post_actions:
       - 'ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState "{percentage: 0.82, power_supply_status: 0}"'
       - ffplay -nodisp -autoexit /home/rd/Music/track.mp3   # plain strings: shell commands, run in the background

@@ -63,6 +63,7 @@
     <label>y <input id="wy" type="number" step="0.01"></label>
     <label>yaw° <input id="wyaw" type="number" step="1"></label>
   </div>
+  <div class="row"><label>pause (s) <input id="wpause" type="number" step="0.5" min="0" title="stop here for this long before the actions run"></label></div>
   <div class="row">
     <button id="up">▲</button><button id="down">▼</button>
     <button id="facenext" title="heading toward the next waypoint">face next</button>
@@ -147,7 +148,7 @@ function renderList() {
   const L = $("#list"); L.innerHTML = "";
   route.waypoints.forEach((w, i) => {
     const d = document.createElement("div"); d.className = (i === sel ? "sel " : "") + (isMarked(w) ? "mark" : "");
-    d.innerHTML = `<span>${i + 1}. ${w.name}${w.post_actions && w.post_actions.length ? " ⚑" : ""}</span><span class="muted">${w.x.toFixed(2)}, ${w.y.toFixed(2)}</span>`;
+    d.innerHTML = `<span>${i + 1}. ${w.name}${w.pause > 0 ? ` ⏸${w.pause}s` : ""}${w.post_actions && w.post_actions.length ? " ⚑" : ""}</span><span class="muted">${w.x.toFixed(2)}, ${w.y.toFixed(2)}</span>`;
     d.onclick = () => select(i); L.appendChild(d);
   });
   $("#count").textContent = route.waypoints.length ? `(${route.waypoints.length})` : "";
@@ -156,6 +157,7 @@ function select(i) {
   sel = i; const w = route.waypoints[i];
   $("#wname").value = w ? w.name : ""; $("#wx").value = w ? w.x.toFixed(3) : ""; $("#wy").value = w ? w.y.toFixed(3) : "";
   $("#wyaw").value = w ? (w.yaw * 180 / Math.PI).toFixed(1) : "";
+  $("#wpause").value = w && w.pause > 0 ? w.pause : "";
   $("#wactions").value = w && w.post_actions && w.post_actions.length ? jsyaml(w.post_actions) : "";
   renderList(); draw();
 }
@@ -175,7 +177,7 @@ function parseActions(text) {
 function setWaypoint(i, patch) { Object.assign(route.waypoints[i], patch); dirty = true; renderList(); draw(); }
 function addAt(x, y, after) {
   const n = route.waypoints.filter(w => /^wp_\d+$/.test(w.name)).length + 1;
-  const w = {name: `wp_${n}`, x, y, yaw: 0, post_actions: []};
+  const w = {name: `wp_${n}`, x, y, yaw: 0, post_actions: [], pause: 0};
   const idx = (after == null ? route.waypoints.length - 1 : after) + 1;
   route.waypoints.splice(idx, 0, w);
   // face the next waypoint, or continue the previous heading
@@ -215,6 +217,7 @@ $("#wname").oninput = () => sel >= 0 && setWaypoint(sel, {name: $("#wname").valu
 $("#wx").onchange = () => sel >= 0 && setWaypoint(sel, {x: parseFloat($("#wx").value)});
 $("#wy").onchange = () => sel >= 0 && setWaypoint(sel, {y: parseFloat($("#wy").value)});
 $("#wyaw").onchange = () => sel >= 0 && setWaypoint(sel, {yaw: parseFloat($("#wyaw").value) * Math.PI / 180});
+$("#wpause").onchange = () => sel >= 0 && setWaypoint(sel, {pause: parseFloat($("#wpause").value) || 0});
 $("#wactions").onchange = () => sel >= 0 && setWaypoint(sel, {post_actions: parseActions($("#wactions").value)});
 $("#del").onclick = () => { if (sel < 0) return; route.waypoints.splice(sel, 1); dirty = true; select(Math.min(sel, route.waypoints.length - 1)); };
 $("#up").onclick = () => { if (sel > 0) { const W = route.waypoints; [W[sel - 1], W[sel]] = [W[sel], W[sel - 1]]; dirty = true; select(sel - 1); } };

@@ -101,7 +101,7 @@ def load_route(name: str) -> dict:
     for w in d.get("waypoints") or []:
         pos, o = w.get("position", {}) or {}, w.get("orientation", {}) or {}
         wps.append({"name": str(w.get("name", "")), "x": float(pos.get("x", 0)), "y": float(pos.get("y", 0)),
-                    "yaw": yaw_of_q(o), "post_actions": w.get("post_actions") or []})
+                    "yaw": yaw_of_q(o), "post_actions": w.get("post_actions") or [], "pause": float(w.get("pause") or 0)})
     out = {"name": name, "waypoints": wps, "initial_pose": d.get("initial_pose")}
     raw = HERE / f"{name}.raw.yaml"
     if raw.exists():
@@ -123,6 +123,8 @@ def save_route(name: str, data: dict) -> str:
                 raise ValueError(f"post_actions of {entry['name']!r} must be a YAML list")
         if pa:
             entry["post_actions"] = pa
+        if float(w.get("pause") or 0) > 0:
+            entry["pause"] = float(w["pause"])
         wps.append(entry)
     route = {"waypoints": wps}
     if data.get("initial_pose"):

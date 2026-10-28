@@ -250,7 +250,7 @@ def center_route(route: dict, gm: GridMap, max_shift: float, window: float, max_
     wps = route["waypoints"]
     moved = 0
     for i, w in enumerate(wps):
-        if w.get("post_actions") or w.get("marked") or not w["name"].startswith(("wp_", "start")):
+        if w.get("post_actions") or w.get("pause") or w.get("marked") or not w["name"].startswith(("wp_", "start")):
             continue
         prev_ = wps[i - 1] if i > 0 else None
         next_ = wps[i + 1] if i + 1 < len(wps) else None
@@ -320,6 +320,8 @@ def write_route(route: dict, path: Path, header: list[str]) -> None:
         lines.append(f"  - name: {w['name']}")
         lines.append(f"    position: {{x: {p['x']}, y: {p['y']}, z: {p.get('z', 0.0)}}}")
         lines.append(f"    orientation: {{x: {o.get('x', 0.0)}, y: {o.get('y', 0.0)}, z: {o['z']}, w: {o['w']}}}")
+        if w.get("pause"):
+            lines.append(f"    pause: {float(w['pause']):g}")
         if w.get("post_actions"):
             lines.append("    post_actions:")
             lines += ["      " + l for l in yaml.safe_dump(w["post_actions"], sort_keys=False, allow_unicode=True,

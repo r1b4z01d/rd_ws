@@ -6,6 +6,9 @@
     ros2 service call /start_waypoints std_srvs/srv/Trigger {}
     python3 path.py --check route.yaml                      # parse, print the segments and commands, no ROS
 
+Per-waypoint `pause: <seconds>` stops the robot there for that long before its post_actions run
+(a blocking stop, like a `wait: true` action).
+
 post_actions entries (per waypoint, and for initial_pose):
   - "shell command"                 fired on arrival, in the background (the robot keeps driving)
   - run: "shell command"            the same, with options:
@@ -135,6 +138,15 @@ def parse_action(raw, where: str) -> Action:
     raise ValueError(f"{where}: an action is a string, or a mapping with 'run:' or 'vla:'")
 
 
+def pause_action(seconds) -> Optional[Action]:
+    """`pause: N` on a waypoint -> a blocking N-second stop (runs before the waypoint's other actions)."""
+    try:
+        s = float(seconds or 0)
+    except (TypeError, ValueError):
+        raise ValueError(f"pause must be a number of seconds, got {seconds!r}")
+    return Action("pause", s, True, "continue", f"pause {s:g} s") if s > 0 else None
+
+
 def parse_actions(raw, where: str) -> list[Action]:
     if raw is None:
         return []
@@ -155,8 +167,11 @@ def load_route(path: Path) -> tuple[list[Waypoint], Optional[Waypoint]]:
     waypoints = []
     for i, entry in enumerate(entries):
         name = str(entry.get("name", f"waypoint_{i + 1}"))
-        waypoints.append(Waypoint(name, entry.get("position", {}) or {}, entry.get("orientation", {}) or {},
-                                  parse_actions(entry.get("post_actions"), f"waypoint '{name}'")))
+        acts = parse_actions(entry.get("post_actions"), f"waypoint '{name}'")
+        pa = pause_action(entry.get("pause"))
+        if pa is not None:
+            acts.insert(0, pa)
+        waypoints.append(Waypoint(name, entry.get("position", {}) or {}, entry.get("orientation", {}) or {}, acts))
     initial = None
     pose_entry = data.get("initial_pose") if isinstance(data, dict) else None
     if isinstance(pose_entry, dict):
@@ -180,6 +195,18 @@ def run_action(action: Action, log, spin: Optional[Callable[[], None]] = None,
                abort: Optional[Callable[[], bool]] = None) -> int:
     """Run one action, streaming its output into the log. With `spin`, keep the node alive meanwhile;
     with `abort`, terminate the action (SIGTERM, then SIGKILL after 30 s) when it returns True."""
+    if action.kind == "pause":
+        t_end = time.time() + float(action.cmd)
+        log.info(f"[post-action] pausing {float(action.cmd):g} s")
+        while time.time() < t_end:
+            if spin is not None:
+                spin()
+            else:
+                time.sleep(0.2)
+            if abort is not None and abort():
+                log.warning("[post-action] pause interrupted")
+                return 1
+        return 0
     shell = isinstance(action.cmd, str)
     try:
         proc = subprocess.Popen(action.cmd, shell=shell, cwd=VLA_DIR if action.kind == "vla" else None,
@@ -229,7 +256,7 @@ def check(path: Path) -> int:
         for wp in waypoints[a:b + 1]:
             for act in wp.actions:
                 mode = "BLOCKING" if act.blocking else "background"
-                cmd = shlex.join(act.cmd) if isinstance(act.cmd, list) else act.cmd
+                cmd = shlex.join(act.cmd) if isinstance(act.cmd, list) else (act.label if act.kind == "pause" else act.cmd)
                 print(f"      {wp.name}: [{mode}{', on_fail=' + act.on_fail if act.blocking else ''}] {cmd}")
     return 0
 
