@@ -24,3 +24,8 @@ mink
 robot_descriptions
 # Elgato Stream Deck (teleop/streamdeck.py, eval_hw buttons); pure python, needs libhidapi-hidraw0 (apt list)
 streamdeck
+
+# the web manager (webui/server.py) when it runs on the robot too (services/rd/vla_webui.conf)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
