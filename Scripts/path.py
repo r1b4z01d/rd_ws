@@ -28,6 +28,9 @@ post_actions entries (per waypoint, and for initial_pose):
 A waypoint with a blocking action ends a Nav2 FollowWaypoints segment: the robot arrives, the waypoint's
 background actions fire, its blocking actions run in order (the node keeps spinning), then the next
 segment starts. A failed blocking action with on_fail: stop ends the route where the robot stands.
+DEADMAN: once the route is running, pressing the gamepad's drive-enable or turbo button (the indices in
+src/robot_disco/config/joystick.yaml) cancels the Nav2 goal and ends the route; a blocking action running
+at that moment is sent SIGTERM (the eval's clean exit) first. --no-deadman-stop disables it.
 `vla:` actions go through ~/VLA/scripts/vla_action.py, which stops the recording panel if it runs,
 switches the inference server to the model, runs scripts/eval_hw.py --auto and returns when the arm is
 back home; see VLA/wiki/Deploy-on-Hardware.md.
@@ -47,6 +50,20 @@ from typing import Callable, Optional
 import yaml
 
 VLA_DIR = os.environ.get("VLA_DIR", os.path.expanduser("~/VLA"))
+JOYSTICK_YAML = Path(__file__).resolve().parent.parent / "src" / "robot_disco" / "config" / "joystick.yaml"
+
+
+def stop_buttons() -> list[int]:
+    """The gamepad buttons that stop a running route: the drive-enable and turbo buttons from joystick.yaml."""
+    try:
+        d = yaml.safe_load(open(JOYSTICK_YAML)) or {}
+        pr = (d.get("teleop_node") or {}).get("ros__parameters") or {}
+        out = [int(pr[k]) for k in ("enable_button", "enable_turbo_button") if k in pr and int(pr[k]) >= 0]
+        if out:
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    return [7, 6]
 
 
 @dataclass
@@ -158,8 +175,10 @@ def segments(waypoints: list[Waypoint]) -> list[tuple[int, int]]:
     return segs
 
 
-def run_action(action: Action, log, spin: Optional[Callable[[], None]] = None) -> int:
-    """Run one action, streaming its output into the log. With `spin`, keep the node alive meanwhile."""
+def run_action(action: Action, log, spin: Optional[Callable[[], None]] = None,
+               abort: Optional[Callable[[], bool]] = None) -> int:
+    """Run one action, streaming its output into the log. With `spin`, keep the node alive meanwhile;
+    with `abort`, terminate the action (SIGTERM, then SIGKILL after 30 s) when it returns True."""
     shell = isinstance(action.cmd, str)
     try:
         proc = subprocess.Popen(action.cmd, shell=shell, cwd=VLA_DIR if action.kind == "vla" else None,
@@ -174,11 +193,20 @@ def run_action(action: Action, log, spin: Optional[Callable[[], None]] = None) -
 
     t = threading.Thread(target=_pump, daemon=True)
     t.start()
+    killed_at = None
     while proc.poll() is None:
         if spin is not None:
             spin()
         else:
             time.sleep(0.2)
+        if abort is not None and killed_at is None and abort():
+            log.warning(f"[post-action] aborting: {action.label} (SIGTERM)")
+            proc.terminate()
+            killed_at = time.time()
+        elif killed_at is not None and time.time() - killed_at > 30.0:
+            log.error("[post-action] still running 30 s after SIGTERM — killing it")
+            proc.kill()
+            killed_at = float("inf")
     t.join(timeout=2.0)
     rc = proc.returncode
     if rc == 0:
@@ -206,14 +234,17 @@ def check(path: Path) -> int:
 
 
 def main() -> None:
-    args = [a for a in sys.argv[1:] if not a.startswith("--ros-args")]
+    args = [a for a in sys.argv[1:] if not a.startswith("--ros-args") and a != "--no-deadman-stop"]
     if args and args[0] == "--check":
         sys.exit(check(Path(args[1]) if len(args) > 1 else Path(__file__).with_name("waypoints.yaml")))
     route_path = Path(args[0]) if args else Path(__file__).with_name("waypoints.yaml")
 
+    deadman_enabled = "--no-deadman-stop" not in sys.argv
+
     import rclpy
     import nav2_simple_commander.robot_navigator as rn
     from geometry_msgs.msg import PoseStamped
+    from sensor_msgs.msg import Joy
     from nav_msgs.msg import Path as NavPath
     from nav2_simple_commander.robot_navigator import BasicNavigator
     from rclpy.qos import QoSDurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -285,6 +316,22 @@ def main() -> None:
     navigator.create_service(Trigger, "start_waypoints", handle_start)
     logger.info("Waiting for 'start_waypoints' Trigger service call to begin following waypoints.")
 
+    # Deadman: the gamepad's drive-enable / turbo buttons stop a running route (operator takes over).
+    deadman = {"buttons": stop_buttons(), "armed": False, "pressed": False}
+
+    def _joy(msg) -> None:
+        if deadman["armed"] and not deadman["pressed"] and any(
+                i < len(msg.buttons) and msg.buttons[i] for i in deadman["buttons"]):
+            deadman["pressed"] = True
+            logger.warning(f"[deadman] gamepad button pressed (indices {deadman['buttons']}) — stopping the route")
+
+    if deadman_enabled:
+        navigator.create_subscription(Joy, "/joy", _joy, 10)
+        logger.info(f"[deadman] gamepad buttons {deadman['buttons']} stop the route once it is running")
+
+    def stopped() -> bool:
+        return deadman["pressed"]
+
     def fire_background(idx: int, reason: str) -> None:
         """The waypoint's background actions, once, on (inferred) arrival."""
         if not (0 <= idx < len(waypoints)) or idx in executed:
@@ -302,8 +349,13 @@ def main() -> None:
         """The waypoint's blocking actions, in order, with the robot stopped. False = stop the route."""
         wp = waypoints[idx]
         for act in wp.blocking:
+            if stopped():
+                return False
             logger.info(f"[post-action] waypoint {idx} ({wp.name}): running and WAITING: {act.label}")
-            rc = run_action(act, logger, spin=spin)
+            rc = run_action(act, logger, spin=spin, abort=stopped)
+            if stopped():
+                logger.error(f"[post-action] route stopped by the deadman during '{wp.name}'.")
+                return False
             if rc != 0 and act.on_fail == "stop":
                 logger.error(f"[post-action] route stopped at '{wp.name}' (on_fail: stop).")
                 return False
@@ -318,9 +370,13 @@ def main() -> None:
         logger.info(f"Following {len(names)} goal(s): {', '.join(names)}")
         last_index = None
         last_feedback_log = last_status_log = time.time()
+        cancelled = False
         while rclpy.ok() and not navigator.isTaskComplete():
             spin()
             now = time.time()
+            if stopped() and not cancelled:
+                navigator.cancelTask()          # Nav2 stops the base; the loop ends on the cancel result
+                cancelled = True
             feedback = navigator.getFeedback()
             if feedback and feedback.current_waypoint is not None:
                 current = first + int(feedback.current_waypoint)
@@ -347,6 +403,8 @@ def main() -> None:
                             f"executed_actions={sorted(executed)}")
                 last_status_log = now
         result = navigator.getResult()
+        if cancelled:
+            return rn.TaskResult.CANCELED
         # Nav2's waypoint follower skips a waypoint whose NavigateToPose failed (stop_on_failure is
         # off) and still reports SUCCEEDED, listing the skipped ones in missed_waypoints. On 2026-10-27
         # every goal failed within a second (the controller had no map frame) and the whole 19 m route
@@ -383,6 +441,7 @@ def main() -> None:
     stopped_early = False
     if rclpy.ok():
         started = True
+        deadman["armed"] = True
         for first, last in segs:
             result = follow(first, last)
             if result != rn.TaskResult.SUCCEEDED:
@@ -393,6 +452,8 @@ def main() -> None:
 
     if not started:
         logger.warning("Shutting down without starting waypoint following (no service call received).")
+    elif stopped():
+        logger.warning("Route STOPPED by the deadman button (operator took over).")
     elif stopped_early:
         logger.warning("Route stopped by a failed blocking action.")
     elif result == rn.TaskResult.SUCCEEDED:
