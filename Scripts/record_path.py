@@ -8,6 +8,7 @@
     python3 record_path.py simplify tigger.raw.yaml --tolerance 0.3   # re-reduce a recording without re-driving
     python3 record_path.py center tigger.yaml --map ../src/robot_disco/maps/zone_one.yaml   # unmarked waypoints
                                                     # to the middle of the free corridor they sit in (-o, --max-shift)
+    python3 record_path.py densify tigger.yaml --spacing 1.0   # intermediate waypoints on legs longer than that
     python3 path.py --check tigger.yaml             # what the route runner will do with it
 
 `record` samples the robot's map pose (TF map -> base_footprint by default, /amcl_pose with --source amcl)
@@ -287,6 +288,31 @@ def center_route(route: dict, gm: GridMap, max_shift: float, window: float, max_
     return moved
 
 
+def densify_route(route: dict, spacing: float) -> int:
+    """Insert intermediate (unmarked) waypoints on every leg longer than `spacing`, evenly spaced, so
+    Nav2 gets short hops along the recorded line instead of one long goal. Names: <prev>_<k>."""
+    wps = route["waypoints"]
+    out, added = [], 0
+    for i, w in enumerate(wps):
+        out.append(w)
+        if i + 1 >= len(wps):
+            break
+        nx, ny = wps[i + 1]["position"]["x"], wps[i + 1]["position"]["y"]
+        x, y = w["position"]["x"], w["position"]["y"]
+        length = math.hypot(nx - x, ny - y)
+        n = int(math.ceil(length / spacing)) - 1
+        base = w["name"].replace(" ", "_")
+        for k in range(1, n + 1):
+            f = k / (n + 1)
+            px, py = round(x + (nx - x) * f, 4), round(y + (ny - y) * f, 4)
+            q = quat_of(math.atan2(ny - y, nx - x))
+            out.append({"name": f"{base}_{k}", "position": {"x": px, "y": py, "z": 0.0},
+                        "orientation": {"x": 0.0, "y": 0.0, "z": q["z"], "w": q["w"]}})
+            added += 1
+    route["waypoints"] = out
+    return added
+
+
 def write_route(route: dict, path: Path, header: list[str]) -> None:
     lines = list(header) + ["waypoints:"]
     for w in route["waypoints"]:
@@ -481,7 +507,19 @@ def main() -> int:
     p.add_argument("--window", type=float, default=2.0, help="how far across the route to look for walls, metres")
     p.add_argument("--max-width", type=float, default=3.0, help="wider free spans are open areas: left alone")
     p.add_argument("-o", "--out", default=None, help="write here (default: overwrite the route file)")
+    p = sub.add_parser("densify", help="insert intermediate waypoints on long legs")
+    p.add_argument("route")
+    p.add_argument("--spacing", type=float, default=1.0, help="maximum distance between consecutive waypoints, metres")
+    p.add_argument("-o", "--out", default=None)
     a = ap.parse_args()
+    if a.cmd == "densify":
+        route = yaml.safe_load(open(a.route)) or {}
+        added = densify_route(route, a.spacing)
+        out = Path(a.out) if a.out else Path(a.route)
+        write_route(route, out, [f"# {os.path.basename(a.route)}: {added} intermediate waypoint(s) added by record_path.py densify "
+                                 f"(spacing {a.spacing} m); marked poses untouched."])
+        print(f"{out}: {added} intermediate waypoint(s) added -> {len(route['waypoints'])} waypoints")
+        return 0
     if a.cmd == "center":
         route = yaml.safe_load(open(a.route)) or {}
         gm = GridMap(a.map)

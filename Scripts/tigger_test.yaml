@@ -1,12 +1,25 @@
-# tigger_test.yaml: wp_4 moved to the first yellow X (8.25, 2.85; it was 8.2241, 2.9149) and renamed x_1, x_2 added at the
-# second X (8.33, 4.3) — positions taken from the Foxglove screenshot of 2026-10-27 by fitting the drawn route (±10 cm).
-# Unmarked waypoints were centred in their corridor on zone_one.yaml before that; marked poses are untouched.
+# tigger_test.yaml: 10 intermediate waypoint(s) added by record_path.py densify (spacing 1.0 m); marked poses untouched.
 waypoints:
   - name: wp_1
     position: {x: 1.5628, y: 1.203, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.271056, w: 0.962564}
+  - name: wp_1_1
+    position: {x: 2.1404, y: 1.5564, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.271056, w: 0.962564}
   - name: wp_2
     position: {x: 2.7181, y: 1.9097, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: wp_2_1
+    position: {x: 3.6952, y: 1.9982, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: wp_2_2
+    position: {x: 4.6723, y: 2.0867, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: wp_2_3
+    position: {x: 5.6493, y: 2.1752, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
+  - name: wp_2_4
+    position: {x: 6.6264, y: 2.2637, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.045149, w: 0.99898}
   - name: wp_3
     position: {x: 7.6035, y: 2.3522, z: 0.0}
@@ -14,14 +27,26 @@ waypoints:
   - name: x_1
     position: {x: 8.25, y: 2.85, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.687354, w: 0.726322}
+  - name: x_1_1
+    position: {x: 8.29, y: 3.575, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.687354, w: 0.726322}
   - name: x_2
     position: {x: 8.33, y: 4.3, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.765867, w: 0.642999}
   - name: wp_5
     position: {x: 8.2749, y: 4.6135, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.697904, w: 0.716192}
+  - name: wp_5_1
+    position: {x: 8.2945, y: 5.3724, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.697904, w: 0.716192}
+  - name: wp_5_2
+    position: {x: 8.3142, y: 6.1314, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.697904, w: 0.716192}
   - name: wp_6
     position: {x: 8.3338, y: 6.8903, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.69337, w: 0.720582}
+  - name: wp_6_1
+    position: {x: 8.3631, y: 7.6499, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: 0.69337, w: 0.720582}
   - name: bookshelf
     position: {x: 8.3923, y: 8.4096, z: 0.0}
@@ -40,6 +65,9 @@ waypoints:
           lavfi -i 'sine=f=660:d=0.35'
         wait: true
         on_fail: continue
+  - name: banana_bed_1
+    position: {x: 8.269, y: 7.6136, z: 0.0}
+    orientation: {x: 0.0, y: 0.0, z: -0.690068, w: 0.723744}
   - name: wp_9
     position: {x: 8.303, y: 6.8993, z: 0.0}
     orientation: {x: 0.0, y: 0.0, z: -0.675489, w: 0.73737}
