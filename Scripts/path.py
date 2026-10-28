@@ -347,6 +347,20 @@ def main() -> None:
                             f"executed_actions={sorted(executed)}")
                 last_status_log = now
         result = navigator.getResult()
+        # Nav2's waypoint follower skips a waypoint whose NavigateToPose failed (stop_on_failure is
+        # off) and still reports SUCCEEDED, listing the skipped ones in missed_waypoints. On 2026-10-27
+        # every goal failed within a second (the controller had no map frame) and the whole 19 m route
+        # "succeeded" in 4 s without the base moving; treat any skipped waypoint as a failure.
+        missed = []
+        try:
+            missed = list(navigator.result_future.result().result.missed_waypoints)
+        except Exception:  # noqa: BLE001 — older nav2 / no result object
+            pass
+        if missed:
+            names = [waypoints[first + i].name for i in missed if 0 <= first + i < len(waypoints)]
+            logger.error(f"[waypoint] Nav2 skipped {len(missed)} waypoint(s) it could not reach: {names} "
+                         "— stopping the route (check the navigation log: planner/controller errors, TF)")
+            return rn.TaskResult.FAILED
         if result == rn.TaskResult.SUCCEEDED:
             fire_background(last, "segment completion")
         return result
