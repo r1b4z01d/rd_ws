@@ -40,7 +40,11 @@ sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
 
 STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}}
-SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan", "s2e": "/rp_s2e_lidar/scan"}   # drawn yellow / green on the map view
+# Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
+# has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
+# the driver output, --scan-topics name=topic,... for anything else).
+SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan_filtered", "s2e": "/rp_s2e_lidar/scan_filtered"}
+RAW_SCAN_TOPICS = {"s1": "/rp_s1_lidar/scan", "s2e": "/rp_s2e_lidar/scan"}
 SCAN_MAX_POINTS = 720
 
 
@@ -269,7 +273,16 @@ def main() -> int:
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--map", type=Path, default=HERE.parent / "src" / "robot_disco" / "maps" / "zone_one.yaml")
     ap.add_argument("--no-ros", action="store_true", help="do not try to read the robot's pose")
+    ap.add_argument("--raw-scans", action="store_true", help="draw the lidar drivers' raw scans instead of the filtered ones")
+    ap.add_argument("--scan-topics", default=None, metavar="name=topic,...",
+                    help="override the scan topics drawn on the map (default: the filtered RPLiDAR scans)")
     ARGS = ap.parse_args()
+    if ARGS.scan_topics:
+        SCAN_TOPICS.clear()
+        SCAN_TOPICS.update(dict(kv.split("=", 1) for kv in ARGS.scan_topics.split(",")))
+    elif ARGS.raw_scans:
+        SCAN_TOPICS.clear()
+        SCAN_TOPICS.update(RAW_SCAN_TOPICS)
     load_map(ARGS.map)
     if not ARGS.no_ros:
         threading.Thread(target=ros_pose_thread, daemon=True).start()
@@ -277,7 +290,7 @@ def main() -> int:
         STATE["ros"] = "disabled (--no-ros)"
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
     print(f"[route_editor] map {ARGS.map.name} {STATE['map']['width']}x{STATE['map']['height']} @ {STATE['map']['resolution']} m; "
-          f"routes: {route_files()}\n[route_editor] open http://<this host>:{ARGS.port}/", flush=True)
+          f"routes: {route_files()}; scans: {SCAN_TOPICS}\n[route_editor] open http://<this host>:{ARGS.port}/", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
