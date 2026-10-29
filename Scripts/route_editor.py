@@ -666,8 +666,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": f"no {name} data yet"}, 404)
             elif u.path == "/api/cameras":
                 now = time.time()
-                self._json({"cameras": [{"name": n, "label": CAMERA_LABELS[n], "topic": t, "url": f"/cam/{n}.mjpg",
-                                         "snapshot": f"/cam/{n}.jpg",
+                # the streams live on their own port: browsers allow ~6 connections per host:port, and four
+                # open MJPEG streams on the page's port starved every other request (slow page switches)
+                host = (self.headers.get("Host") or "127.0.0.1").rsplit(":", 1)[0]
+                base = f"http://{host}:{ARGS.cam_port}" if ARGS.cam_port else ""
+                self._json({"cameras": [{"name": n, "label": CAMERA_LABELS[n], "topic": t, "url": f"{base}/cam/{n}.mjpg",
+                                         "snapshot": f"{base}/cam/{n}.jpg",
                                          "alive": n in STATE["jpeg"] and now - STATE["jpeg"][n]["t"] < 3.0}
                                         for n, t in CAMERA_TOPICS.items()]})
             elif u.path.startswith("/cam/") and u.path.endswith(".mjpg"):
@@ -729,6 +733,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--cam-port", type=int, default=None, metavar="PORT",
+                    help="second listener for the camera MJPEG streams (default: --port + 1; 0 = same port)")
     ap.add_argument("--map", type=Path, default=HERE.parent / "src" / "robot_disco" / "maps" / "zone_one.yaml")
     ap.add_argument("--no-ros", action="store_true", help="do not try to read the robot's pose")
     ap.add_argument("--sim", action="store_true", help="no robot: simulate pose, TF, scans, Velodyne, costmaps, plans, joints "
@@ -758,6 +764,12 @@ def main() -> int:
     else:
         STATE["ros"] = "disabled (--no-ros)"
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
+    if ARGS.cam_port is None:
+        ARGS.cam_port = ARGS.port + 1
+    if ARGS.cam_port:
+        cam_srv = ThreadingHTTPServer((ARGS.host, ARGS.cam_port), Handler)   # same handler, own connection pool
+        threading.Thread(target=cam_srv.serve_forever, daemon=True, name='cam-http').start()
+    print(f"[route_editor] camera streams on port {ARGS.cam_port or ARGS.port}", flush=True)
     print(f"[route_editor] map {ARGS.map.name} {STATE['map']['width']}x{STATE['map']['height']} @ {STATE['map']['resolution']} m; "
           f"routes: {route_files()}; scans: {SCAN_TOPICS}\n[route_editor] open http://<this host>:{ARGS.port}/", flush=True)
     try:

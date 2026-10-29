@@ -17,6 +17,11 @@
     const st = document.createElement("style"); st.textContent = STYLE; document.head.appendChild(st);
     const strip = document.createElement("div"); strip.id = "cams"; strip.style.top = top + "px"; view.appendChild(strip);
     const figs = {}; let cams = [];
+    // the manager keeps a hidden tab's iframe alive: with no size we are not on screen, so drop the
+    // streams (8 open streams across two hidden-or-not pages would exhaust the connection pool)
+    const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;
+    let shown = onScreen();
+    setInterval(() => { const now = onScreen(); if (now !== shown) { shown = now; for (const n of Object.keys(figs)) apply(n); } }, 1000);
     let prefs = null; try { prefs = JSON.parse(localStorage.getItem("cams.on") || "null"); } catch (e) { /* no storage */ }
     const save = () => { try { localStorage.setItem("cams.on", JSON.stringify(Object.fromEntries(cams.map((c) => [c.name, figs[c.name].cb.checked])))); } catch (e) { /* ignore */ } };
     function apply(name) {
@@ -24,7 +29,7 @@
       f.fig.hidden = !on;
       f.fig.classList.toggle("dead", !f.cam.alive);
       f.cap.textContent = f.cam.label + (f.cam.alive ? "" : " · no frames");
-      const want = on && f.cam.alive;
+      const want = on && f.cam.alive && shown;
       if (want && !f.img.dataset.on) { f.img.src = f.cam.url + "?fps=10"; f.img.dataset.on = "1"; }
       if (!want && f.img.dataset.on) { f.img.removeAttribute("src"); delete f.img.dataset.on; }
     }
@@ -49,6 +54,7 @@
       try { const d = await fetch("/api/cameras").then((r) => r.json()); build(d.cameras || []); } catch (e) { /* server away: keep what we have */ }
       setTimeout(poll, 5000);
     }
-    poll();
+    // after the page's own first loads (scripts, map, model): the streams are long-lived connections
+    if (document.readyState === "complete") setTimeout(poll, 800); else window.addEventListener("load", () => setTimeout(poll, 800));
   };
 })();

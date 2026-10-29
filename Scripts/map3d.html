@@ -220,6 +220,14 @@ const robotHeading = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE
 const urdfLoader = new URDFLoader();
 urdfLoader.packages = (pkg) => "/mesh/" + pkg;            // package://X/… -> served from X's share directory
 urdfLoader.parseCollision = false;
+// the URDF references the same STL many times (the hand: ~40 files, 162 visuals): load each file once
+// and hand out clones, instead of 162 requests on the first page load
+const meshCache = new Map();
+const defaultMeshLoader = urdfLoader.loadMeshCb;
+urdfLoader.loadMeshCb = (path, manager, done) => {
+  if (!meshCache.has(path)) meshCache.set(path, new Promise((res, rej) => defaultMeshLoader(path, manager, (obj, err) => (err || !obj) ? rej(err || new Error("no mesh")) : res(obj))));
+  meshCache.get(path).then((obj) => done(obj.clone()), (err) => done(null, err));
+};
 function loadUrdf() {
   urdfLoader.load("/api/urdf", (robot) => {
     robot.traverse((c) => { if (c.isMesh) { c.castShadow = false; if (c.material && c.material.color && c.material.color.r > 0.95 && c.material.color.g > 0.95 && c.material.color.b > 0.95) c.material.color.setHex(0xb8bcc8); } });
@@ -308,7 +316,12 @@ canvas.addEventListener("pointerup", async (e) => {
 });
 
 // ---------------------------------------------------------------- polling (each loop survives its own errors)
-async function loop(fn, ms) { try { await fn(); } catch (e) { console.warn(fn.name, e); } setTimeout(() => loop(fn, ms), typeof ms === "function" ? ms() : ms); }
+const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;   // false inside a hidden manager tab
+async function loop(fn, ms) {
+  if (!onScreen()) { setTimeout(() => loop(fn, ms), 1000); return; }
+  try { await fn(); } catch (e) { console.warn(fn.name, e); }
+  setTimeout(() => loop(fn, ms), typeof ms === "function" ? ms() : ms);
+}
 
 async function pollTf() {
   const d = await fetch("/api/tf").then((r) => r.json());
