@@ -28,6 +28,11 @@
   #toolbar { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
   #toolbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   #out { white-space: pre-wrap; font-size: 11px; color: var(--muted); }
+  details.settings { width: 100%; }
+  details.settings summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; list-style: none; }
+  details.settings summary::before { content: "▸ "; } details.settings[open] summary::before { content: "▾ "; }
+  details.settings summary::-webkit-details-marker { display: none; }
+  details.settings .row { margin: 6px 0 0 14px; }
 </style>
 <script type="importmap">
 { "imports": { "three": "/static/vendor/three.module.min.js",
@@ -50,12 +55,14 @@
     <h3>Sensors</h3>
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-velodyne" checked><span class="sw" style="background:linear-gradient(90deg,#3030ff,#30ff30,#ff3030)"></span>Velodyne</label>
-      <select id="cloudcolor"><option value="height">colour: height</option><option value="intensity">colour: intensity</option><option value="flat">colour: flat</option></select>
-    </div>
-    <div class="row">
-      <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> px</label>
-      <label class="cb">rate <input type="number" id="cloudhz" value="4" min="1" max="10" step="1"> Hz</label>
-      <label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> pts</label>
+      <details id="velodyne-settings" class="settings"><summary>settings</summary>
+        <div class="row"><select id="cloudcolor"><option value="height">colour: height</option><option value="intensity">colour: intensity</option><option value="flat">colour: flat</option></select></div>
+        <div class="row">
+          <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> px</label>
+          <label class="cb">rate <input type="number" id="cloudhz" value="4" min="1" max="10" step="1"> Hz</label>
+        </div>
+        <div class="row"><label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> pts</label></div>
+      </details>
     </div>
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-s1"><span class="sw" style="background:#f5d033"></span>S1</label>
@@ -79,7 +86,7 @@
       <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" style="background:#fabe17"></span>route</label>
       <select id="routes"></select>
     </div>
-    <h3>Camera</h3>
+    <h3>View point</h3>
     <div class="row">
       <button id="cam-reset">reset</button><button id="cam-top">top-down</button><button id="cam-robot">look at robot</button>
     </div>
@@ -356,6 +363,9 @@ async function loadRoutes() {
   await loadRoute(s.value);
 }
 $("#routes").onchange = () => loadRoute($("#routes").value);
+// the Velodyne settings fold stays as you left it (per browser)
+{ const d = $("#velodyne-settings"); try { d.open = localStorage.getItem("map3d.velodyneSettings") === "open"; } catch (e) { /* no storage */ }
+  d.addEventListener("toggle", () => { try { localStorage.setItem("map3d.velodyneSettings", d.open ? "open" : "closed"); } catch (e) { /* ignore */ } }); }
 for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-poly", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
 $("#ptsize").onchange = () => { for (const p of Object.values(clouds)) p.material.size = parseFloat($("#ptsize").value) || 2; };
 $("#cam-reset").onclick = () => setView(pose ? robotPos.clone() : new THREE.Vector3(MAP ? MAP.origin[0] + MAP.width * MAP.resolution / 2 : 0, MAP ? MAP.origin[1] + MAP.height * MAP.resolution / 2 : 0, 0));
