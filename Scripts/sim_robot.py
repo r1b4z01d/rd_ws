@@ -18,6 +18,7 @@ No ROS, numpy + PIL only.
 """
 from __future__ import annotations
 
+import heapq
 import math
 import threading
 import time
@@ -199,6 +200,16 @@ class Sim:
         self._obs_seq = 0
         self.global_stamp = 0
         self.poly_state: dict = {}                    # name -> triggered (the sim stops like the collision monitor)
+        # the planner (nav2's global planner stand-in): A* on the inflated costmap + cones at 0.1 m, in its
+        # own thread, replanned every second and whenever a cone or the target changes
+        self.plan_lock = threading.Lock()
+        self.plan_path: list = []                     # [(x, y), ...] from the robot to the current target
+        self.plan_status = "idle"
+        self.plan_dirty = True
+        self.plan_grid = None
+        self.plan_idx = 0
+        self.nopath_since = None                      # a waypoint that stays unreachable is skipped (nav2's
+                                                      # waypoint follower goes on to the next one on failure)
         self.t0 = time.time()
         self.wheel = [0.0, 0.0]
         self.rng = np.random.default_rng(1)
@@ -211,6 +222,8 @@ class Sim:
             self.x, self.y = self.map.free_center()
             self.yaw = 0.0
         self.global_cost = self.map.inflated()
+        self._rebuild_plan_grid()
+        threading.Thread(target=self._planner_loop, daemon=True, name="sim-planner").start()
         self.S["costmaps"]["global"] = {"msg": grid_msg("map", self.map.ox, self.map.oy, self.map.res, self.map.W, self.map.H, self.global_cost.ravel()), "t": time.time()}
         if self.urdf:
             self.S["urdf"] = self.urdf
@@ -256,6 +269,8 @@ class Sim:
         self.global_stamp += 1
         self.S["costmaps"]["global"] = {"msg": grid_msg("map", self.map.ox, self.map.oy, self.map.res, self.map.W, self.map.H,
                                                         self.cost_with_obstacles(self.global_cost, None).ravel()), "t": time.time()}
+        self._rebuild_plan_grid()
+        self.plan_dirty = True
 
     def cost_with_obstacles(self, cost, window):
         """Lethal + inscribed + inflation marks for every cone (like the obstacle layer would mark the
@@ -275,6 +290,137 @@ class Sim:
             mark = np.where(d <= r0, 100, np.where(d <= r0 + 0.25, 99, np.where(d <= r0 + 0.45, (98 * np.exp(-3.0 * (d - r0 - 0.25))).astype(np.int16), 0)))
             c = np.maximum(c, mark)
         return c.astype(np.int8)
+
+    # ------------------------------------------------------------------ planner
+    def _rebuild_plan_grid(self):
+        """Planning grid at 2x the map cell (0.1 m): max-pooled costmap with the cones; -1 = unknown."""
+        c = self.cost_with_obstacles(self.global_cost, None).astype(np.int16)
+        H, W = (c.shape[0] // 2) * 2, (c.shape[1] // 2) * 2
+        self.plan_grid = c[:H, :W].reshape(H // 2, 2, W // 2, 2).max(axis=(1, 3))
+        self.plan_res = self.map.res * 2
+
+    def _plan_cell(self, x, y):
+        return int((x - self.map.ox) / self.plan_res), int((y - self.map.oy) / self.plan_res)
+
+    def _free_line(self, a, b):
+        n = max(2, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (self.plan_res / 2)) + 1)
+        xs = np.linspace(a[0], b[0], n)
+        ys = np.linspace(a[1], b[1], n)
+        col = ((xs - self.map.ox) / self.plan_res).astype(int)
+        row = ((ys - self.map.oy) / self.plan_res).astype(int)
+        g = self.plan_grid
+        ok = (col >= 0) & (col < g.shape[1]) & (row >= 0) & (row < g.shape[0])
+        if not ok.all():
+            return False
+        v = g[row, col]
+        return bool(((v >= 0) & (v < 99)).all())
+
+    def plan(self, start, goal, max_expand=80000):
+        """Weighted A* (8-connected) on the planning grid: lethal / unknown cells are walls, the inscribed
+        ring is passable at a steep price and inflation is a penalty — like nav2's NavFn, which squeezes
+        past a cone in a corridor rather than giving up. Returns [(x, y), ...] or []."""
+        g = self.plan_grid
+        H, W = g.shape
+        sc, sr = self._plan_cell(*start)
+        gc, gr = self._plan_cell(*goal)
+        if not (0 <= sc < W and 0 <= sr < H and 0 <= gc < W and 0 <= gr < H):
+            return []
+        if g[gr, gc] >= 100 or g[gr, gc] < 0:
+            return []                                   # the goal sits inside an obstacle
+        start_n, goal_n = (sr, sc), (gr, gc)
+        came = {start_n: None}
+        gcost = {start_n: 0.0}
+        h = lambda n: 1.2 * math.hypot(n[0] - gr, n[1] - gc)
+        pq = [(h(start_n), 0.0, start_n)]
+        nbrs = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0), (-1, -1, 1.4142), (-1, 1, 1.4142), (1, -1, 1.4142), (1, 1, 1.4142)]
+        expanded = 0
+        while pq:
+            _, gc_, n = heapq.heappop(pq)
+            if n == goal_n:
+                break
+            if gc_ > gcost.get(n, 1e18):
+                continue
+            expanded += 1
+            if expanded > max_expand:
+                return []
+            r, c = n
+            for dr, dc, step in nbrs:
+                rr, cc = r + dr, c + dc
+                if not (0 <= rr < H and 0 <= cc < W):
+                    continue
+                v = g[rr, cc]
+                if v < 0 or v >= 100:
+                    continue
+                ng = gc_ + step * (25.0 if v >= 99 else 1.0 + 4.0 * v / 98.0)   # inscribed: last resort; inflation: keep to the middle
+                m = (rr, cc)
+                if ng < gcost.get(m, 1e18):
+                    gcost[m] = ng
+                    came[m] = n
+                    heapq.heappush(pq, (ng + h(m), ng, m))
+        if goal_n not in came:
+            return []
+        cells = []
+        n = goal_n
+        while n is not None:
+            cells.append(n)
+            n = came[n]
+        cells.reverse()
+        pts = [(self.map.ox + (c + 0.5) * self.plan_res, self.map.oy + (r + 0.5) * self.plan_res) for r, c in cells]
+        pts[0], pts[-1] = tuple(start), tuple(goal)
+        # string-pull: skip ahead while the straight segment stays in free cells
+        out = [pts[0]]
+        i = 0
+        while i < len(pts) - 1:
+            j = i + 1
+            while j + 1 < len(pts) and self._free_line(pts[i], pts[j + 1]):
+                j += 1
+            out.append(pts[j])
+            i = j
+        return out
+
+    def _planner_loop(self):
+        last = 0.0
+        while True:
+            now = time.time()
+            tgt = None if self.halted else self.current_target()
+            if tgt is None:
+                with self.plan_lock:
+                    self.plan_path, self.plan_status = [], "idle"
+                time.sleep(0.2)
+                continue
+            if self.plan_dirty or now - last >= 1.0:
+                self.plan_dirty = False
+                last = now
+                path = self.plan((self.x, self.y), (tgt[0], tgt[1]))
+                with self.plan_lock:
+                    self.plan_path, self.plan_status, self.plan_idx = path, ("following" if path else "no path"), 0
+                if path:
+                    self.nopath_since = None
+                else:
+                    self.nopath_since = self.nopath_since or now
+                    if now - self.nopath_since > 3.0 and not self.goal_override and self.targets:
+                        self.nopath_since = None
+                        self.plan_status = "waypoint unreachable, skipped"
+                        if self.ti + self.direction >= len(self.targets) or self.ti + self.direction < 0:
+                            self.direction *= -1
+                        self.ti += self.direction
+                        self.plan_dirty = True
+            time.sleep(0.05)
+
+    def lookahead(self, dist=0.5):
+        """The pure-pursuit carrot: the first path point at least `dist` ahead of the closest one."""
+        with self.plan_lock:
+            path = list(self.plan_path)
+        if len(path) < 2:
+            return None
+        d = [math.hypot(p[0] - self.x, p[1] - self.y) for p in path]
+        k = min(range(len(path)), key=lambda i: d[i])
+        acc = 0.0
+        for i in range(k, len(path) - 1):
+            acc += math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+            if acc >= dist:
+                return path[i + 1]
+        return path[-1]
 
     # ------------------------------------------------------------------ geometry
     def sensor_pose(self, frame):
@@ -323,6 +469,9 @@ class Sim:
             self.S["published"] = {**req, "t": time.time()}
         self.S["halted"] = self.halted
         tgt = None if self.halted else self.current_target()
+        if tgt is not getattr(self, "_last_tgt", None):
+            self._last_tgt = tgt
+            self.plan_dirty = True
         v = w = 0.0
         if tgt:
             dx, dy = tgt[0] - self.x, tgt[1] - self.y
@@ -340,10 +489,14 @@ class Sim:
                         self.direction *= -1
                     self.ti += self.direction
             else:
-                err = _wrap(math.atan2(dy, dx) - self.yaw)
-                w = max(-W_MAX, min(W_MAX, 2.5 * err))
-                v = V_MAX * max(0.0, math.cos(err)) if abs(err) < 1.2 else 0.0
-                v = min(v, 0.6 * dist + 0.1)
+                carrot = self.lookahead()
+                if carrot is None:
+                    v = w = 0.0                               # no path (blocked goal): wait, like nav2
+                else:
+                    err = _wrap(math.atan2(carrot[1] - self.y, carrot[0] - self.x) - self.yaw)
+                    w = max(-W_MAX, min(W_MAX, 2.5 * err))
+                    v = V_MAX * max(0.0, math.cos(err)) if abs(err) < 1.2 else 0.0
+                    v = min(v, 0.6 * dist + 0.1)
         if self.poly_state.get("stop"):                 # what the collision monitor does with a tripped zone
             v = w = 0.0
         elif self.poly_state.get("slowdown"):
@@ -438,16 +591,18 @@ class Sim:
     def nav(self):
         tgt = self.current_target()
         out = {"polygons": {}}
-        rem = [self.goal_override] if self.goal_override else (self.targets[self.ti::self.direction] if self.targets else [])
+        with self.plan_lock:
+            path, status = list(self.plan_path), self.plan_status
+        out["status"] = status
         if tgt:
-            pts = [(self.x, self.y)]
-            for t in rem:
-                x0, y0 = pts[-1]
-                n = max(1, int(math.hypot(t[0] - x0, t[1] - y0) / 0.1))
-                pts += [(x0 + (t[0] - x0) * k / n, y0 + (t[1] - y0) * k / n) for k in range(1, n + 1)]
-            pts = pts[: 400]
-            out["plan"] = {"frame": "map", "t": time.time(), "pts": [[round(p[0], 3), round(p[1], 3), 0.0] for p in pts]}
-            out["local_plan"] = {"frame": "odom", "t": time.time(), "pts": out["plan"]["pts"][:25]}
+            if len(path) >= 2:
+                pts = [path[0]]
+                for a, b in zip(path, path[1:]):              # resample the string-pulled path every 0.1 m
+                    n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / 0.1))
+                    pts += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+                pts = pts[:400]
+                out["plan"] = {"frame": "map", "t": time.time(), "pts": [[round(p[0], 3), round(p[1], 3), 0.0] for p in pts]}
+                out["local_plan"] = {"frame": "odom", "t": time.time(), "pts": out["plan"]["pts"][:25]}
             out["goal"] = {"frame": "map", "x": round(tgt[0], 3), "y": round(tgt[1], 3), "yaw": round(tgt[2], 4), "t": time.time()}
         c, s = math.cos(self.yaw), math.sin(self.yaw)
         rot = lambda pts: [[round(self.x + px * c - py * s, 3), round(self.y + px * s + py * c, 3)] for px, py in pts]

@@ -295,7 +295,7 @@ cloud raycast against the map, costmaps, TF, joints, plans, goal/initial-pose to
 (`sim/robot_sim.urdf` primitives, or the real model after `sim/fetch_assets.sh` with the robot on).
 Movable cones (3D page: `cone` tool drops one, drag to move, shift-click removes; `+ cone ahead`) are seen
 by the simulated lidars / Velodyne / cameras, marked in both costmaps and trip the stop / slowdown zones;
-the sim robot then stops or slows like the collision monitor. Needs only numpy, Pillow and PyYAML. The manager follows with
+the sim robot plans around them (A* on the inflated costmap, replanned every second like nav2, inscribed cells passable at a steep price, a waypoint that stays unreachable is skipped) and stops or slows like the collision monitor when something is in its zones. Needs only numpy, Pillow and PyYAML. The manager follows with
 `python -m webui.server --port 8081 --route-url http://127.0.0.1:8092/`.
 
 The VLA manager embeds the last two as its Map and 3D tabs. three.js 0.182 and urdf-loader 0.12.6 are

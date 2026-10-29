@@ -267,7 +267,7 @@ function setLine(line, pts, z) {
   line.visible = true;
 }
 const polyOn = (name) => { const e = $(`#l-${name}`); return e ? e.checked : true; };   // one checkbox per polygon
-const polyFills = {}; let polyAlert = "";
+const polyFills = {}; let polyAlert = "", navStatus = "";
 function setLoop(name, pts, z, triggered) {
   let l = polyLines[name], f = polyFills[name];
   if (!l) {
@@ -450,6 +450,7 @@ async function pollNav() {
   for (const [name, pg] of Object.entries(d.polygons || {})) { setLoop(name, pg.pts, 0.07, pg.triggered); if (pg.triggered) alerts.push(`${name.toUpperCase()} zone: ${pg.inside} pts`); }
   polyAlert = alerts.join(" · ");
   if (d.obstacles) syncCones(d.obstacles);
+  navStatus = d.status && d.status !== "following" ? `nav: ${d.status}` : "";
   if (d.particles) {
     const n = d.particles.length, pos = new Float32Array(n * 6);
     d.particles.forEach((p, i) => { pos[i * 6] = p[0]; pos[i * 6 + 1] = p[1]; pos[i * 6 + 2] = 0.04; pos[i * 6 + 3] = p[0] + 0.12 * Math.cos(p[2]); pos[i * 6 + 4] = p[1] + 0.12 * Math.sin(p[2]); pos[i * 6 + 5] = 0.04; });
@@ -506,7 +507,7 @@ function animate() {
   controls.update(); renderer.render(scene, camera);
   stats.fN++; const now = performance.now(); if (now - stats.fT > 1000) { stats.fps = stats.fN; stats.fN = 0; stats.fT = now; }
   $("#status").textContent = `${simBadge}${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
-    Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps` + (polyAlert ? ` · ⚠ ${polyAlert}` : "");
+    Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps` + (polyAlert ? ` · ⚠ ${polyAlert}` : "") + (navStatus ? ` · ${navStatus}` : "");
 }
 
 (async () => {
