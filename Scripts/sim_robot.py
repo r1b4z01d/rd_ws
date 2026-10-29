@@ -298,7 +298,7 @@ class Sim:
                 z = np.where(floor, -sz, r_wall * te)
             elif te > 0:
                 d_ceil = np.float32((CEILING - sz) / te)
-                ceil = d_ceil < r_wall
+                ceil = (d_ceil < r_wall) & np.isfinite(r_wall)      # no ceiling outdoors / over unknown space
                 d = np.where(ceil, d_ceil, r_wall)
                 z = np.where(ceil, CEILING - sz, r_wall * te)
             else:
