@@ -167,10 +167,14 @@ function draw() {
   const cmSel = new Set(cmOn());
   for (const [name, cm] of Object.entries(costmaps)) {
     if (!cmSel.has(name) || !cm.img || !cm.img.complete || !cm.meta) continue;
-    const M = cm.meta; const [a, b] = w2c(M.origin[0], M.origin[1] + M.height * M.resolution);   // top-left corner
+    // origin = the grid's bottom-left corner in the map frame, yaw = its x axis (the local costmap lives in
+    // odom; the server folds map->odom into both), so: translate there, rotate, draw the image upwards
+    const M = cm.meta; const [a, b] = w2c(M.origin[0], M.origin[1]);
+    const Wpx = M.width * M.resolution / MAP.resolution * view.scale, Hpx = M.height * M.resolution / MAP.resolution * view.scale;
+    ctx.save(); ctx.translate(a, b); ctx.rotate(-(M.yaw || 0));
     ctx.globalAlpha = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 25) / 100));
-    ctx.drawImage(cm.img, a, b, M.width * M.resolution / MAP.resolution * view.scale, M.height * M.resolution / MAP.resolution * view.scale);
-    ctx.globalAlpha = 1;
+    ctx.drawImage(cm.img, 0, -Hpx, Wpx, Hpx);
+    ctx.restore();
   }
   // 1 m grid
   const gx0 = Math.floor(MAP.origin[0]), gx1 = Math.ceil(MAP.origin[0] + MAP.width * MAP.resolution);

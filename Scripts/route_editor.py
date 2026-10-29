@@ -39,7 +39,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
 
-STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}, "costmaps": {}}
+STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}, "costmaps": {},
+               "frame_tf": {}}   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -186,6 +187,16 @@ def ros_pose_thread() -> None:
                     if pts is not None:
                         scans[name] = {"points": pts, "frame": m.header.frame_id, "topic": topic, "t": now_t}
                 STATE["scans"] = scans
+                # the rolling local costmap is published in odom: keep map->odom (AMCL's correction,
+                # translation AND rotation) so the page can place it on the map
+                for entry in list(STATE["costmaps"].values()):
+                    fr = entry["msg"].header.frame_id
+                    if fr and fr != "map":
+                        try:
+                            tx_, ty_, _, yaw_ = _tf2d(fr)
+                            STATE["frame_tf"][fr] = (tx_, ty_, yaw_)
+                        except Exception:  # noqa: BLE001 — not localized yet
+                            pass
             try:
                 tf = buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
                 t, q = tf.transform.translation, tf.transform.rotation
@@ -218,7 +229,7 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
     st = (m.header.stamp.sec, m.header.stamp.nanosec, m.info.width, m.info.height)
     c = _cm_cache.get(name)
     if c and c["stamp"] == st:
-        return c["png"], c["meta"]
+        return c["png"], _georef(c["meta"], entry["t"])
     w, h = m.info.width, m.info.height
     d = np.array(m.data, dtype=np.int16).reshape(h, w)
     rgba = np.zeros((h, w, 4), np.uint8)
@@ -231,12 +242,35 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
     rgba[d == 100] = (200, 0, 0, 255)
     buf = io.BytesIO()
     Image.fromarray(rgba[::-1]).save(buf, "PNG")      # row 0 of the grid is the bottom
-    meta = {"name": name, "topic": COSTMAP_TOPICS[name], "resolution": float(m.info.resolution),
-            "origin": [float(m.info.origin.position.x), float(m.info.origin.position.y)],
-            "width": w, "height": h, "stamp": f"{st[0]}.{st[1]:09d}", "age_s": round(time.time() - entry["t"], 1),
+    q = m.info.origin.orientation
+    base = {"name": name, "topic": COSTMAP_TOPICS[name], "resolution": float(m.info.resolution),
+            "frame": m.header.frame_id or "map",
+            "origin_frame": [float(m.info.origin.position.x), float(m.info.origin.position.y)],
+            "origin_yaw": math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+            "width": w, "height": h, "stamp": f"{st[0]}.{st[1]:09d}",
             "image": f"/costmap/{name}.png?v={st[0]}.{st[1]}"}
-    _cm_cache[name] = {"stamp": st, "png": buf.getvalue(), "meta": meta}
-    return _cm_cache[name]["png"], meta
+    _cm_cache[name] = {"stamp": st, "png": buf.getvalue(), "meta": base}
+    return _cm_cache[name]["png"], _georef(base, entry["t"])
+
+
+def _georef(base: dict, t_rx: float) -> dict:
+    """The grid's bottom-left corner and x-axis heading IN THE MAP FRAME (the global costmap is published
+    in map, the local one in odom; map->odom is AMCL's drifting correction, re-read on every request)."""
+    meta = dict(base)
+    meta["age_s"] = round(time.time() - t_rx, 1)
+    ox, oy = base["origin_frame"]
+    if base["frame"] == "map":
+        meta["origin"], meta["yaw"] = [ox, oy], base["origin_yaw"]
+        return meta
+    tf = STATE["frame_tf"].get(base["frame"])
+    if tf is None:
+        meta["error"] = f"no TF map->{base['frame']} yet (localization not initialised?)"
+        return meta
+    tx, ty, tyaw = tf
+    c, s_ = math.cos(tyaw), math.sin(tyaw)
+    meta["origin"] = [round(tx + ox * c - oy * s_, 4), round(ty + ox * s_ + oy * c, 4)]
+    meta["yaw"] = base["origin_yaw"] + tyaw
+    return meta
 
 
 # --------------------------------------------------------------------------- routes
