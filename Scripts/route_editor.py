@@ -40,7 +40,10 @@ sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
 
 STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}, "costmaps": {},
-               "frame_tf": {}}   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
+               "frame_tf": {},   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
+               # 3D view: every TF frame in the map frame, joint positions, the URDF, nav2 state, raw sensor msgs
+               "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
+               "publish_q": [], "published": None, "want3d": {}}
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -53,6 +56,13 @@ CLOUD_TOPICS = {"velodyne": "/velodyne_points"}
 CLOUD_Z = (0.1, 2.0)
 CLOUD_MAX_POINTS = 2500
 SCAN_MAX_POINTS = 720
+# 3D view (/3d): nav2's plans, the footprint / collision-monitor polygons, AMCL's particles
+NAV_TOPICS = {"plan": "/plan", "local_plan": "/local_plan"}
+POLY_TOPICS = {"footprint": "/local_costmap/published_footprint", "stop": "/polygon_stop", "slowdown": "/polygon_slowdown"}
+CLOUD_BIN_MAX = 20000          # points per /api/cloud.bin answer (the Velodyne has ~29k per revolution)
+MIME = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8",
+        ".png": "image/png", ".jpg": "image/jpeg", ".stl": "application/octet-stream", ".dae": "model/vnd.collada+xml",
+        ".json": "application/json", ".md": "text/plain", ".txt": "text/plain"}
 
 
 # --------------------------------------------------------------------------- map
@@ -114,6 +124,57 @@ def ros_pose_thread() -> None:
 
         for name, topic in COSTMAP_TOPICS.items():
             node.create_subscription(OccupancyGrid, topic, _keep_costmap(name), cm_qos)
+        STATE["latest"] = latest                       # raw scans / clouds for /api/cloud.bin
+        # ---- 3D view inputs
+        from geometry_msgs.msg import PolygonStamped, PoseStamped, PoseWithCovarianceStamped
+        from nav_msgs.msg import Path
+        from sensor_msgs.msg import JointState
+        from std_msgs.msg import String
+
+        def _yaw(q) -> float:
+            return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+        node.create_subscription(String, "/robot_description", lambda m: STATE.__setitem__("urdf", m.data), cm_qos)
+
+        def _joints(m):
+            for n_, p_ in zip(m.name, m.position):
+                STATE["joints"][n_] = round(float(p_), 5)
+        node.create_subscription(JointState, "/joint_states", _joints, 10)
+
+        def _path(name):
+            def cb(m):
+                step = max(1, len(m.poses) // 400)
+                STATE["nav"][name] = {"frame": m.header.frame_id, "t": time.time(),
+                                      "pts": [[round(p.pose.position.x, 3), round(p.pose.position.y, 3), round(p.pose.position.z, 3)]
+                                              for p in m.poses[::step]]}
+            return cb
+        for name, topic in NAV_TOPICS.items():
+            node.create_subscription(Path, topic, _path(name), 10)
+
+        def _goal(m):
+            STATE["nav"]["goal"] = {"frame": m.header.frame_id, "x": round(m.pose.position.x, 3), "y": round(m.pose.position.y, 3),
+                                    "yaw": round(_yaw(m.pose.orientation), 4), "t": time.time()}
+        node.create_subscription(PoseStamped, "/goal_pose", _goal, 10)
+        polys: dict = {}
+        for name, topic in POLY_TOPICS.items():
+            node.create_subscription(PolygonStamped, topic, (lambda n_: (lambda m: polys.__setitem__(n_, m)))(name), 10)
+        try:
+            from nav2_msgs.msg import ParticleCloud
+            node.create_subscription(ParticleCloud, "/particle_cloud", _keep("particles"), qos_profile_sensor_data)
+        except Exception:  # noqa: BLE001 — nav2_msgs not installed: no particles layer
+            pass
+        # click-to-publish from the 3D page (queued by the HTTP thread, sent from here)
+        # transient-local so a late or latched-expecting subscriber (one asked for DURABILITY) still matches
+        goal_pub = node.create_publisher(PoseStamped, "/goal_pose", cm_qos)
+        init_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+
+        def _frame2d(frame):
+            if frame in ("", "map"):
+                return 0.0, 0.0, 0.0
+            f = STATE["frames"].get(frame)
+            if not f:
+                return None
+            return f[0], f[1], math.atan2(2 * (f[6] * f[5] + f[3] * f[4]), 1 - 2 * (f[4] * f[4] + f[5] * f[5]))
 
         def _tf2d(frame):
             tf = buf.lookup_transform("map", frame, rclpy.time.Time())
@@ -162,6 +223,7 @@ def ros_pose_thread() -> None:
             return np.round(np.stack([mx, my], 1), 3).tolist()
 
         last_scan_pub = 0.0
+        frames_listed_t, frame_names = 0.0, []
         STATE["ros"] = "waiting for TF map->base_footprint"
         while True:
             rclpy.spin_once(node, timeout_sec=0.2)
@@ -197,6 +259,59 @@ def ros_pose_thread() -> None:
                             STATE["frame_tf"][fr] = (tx_, ty_, yaw_)
                         except Exception:  # noqa: BLE001 — not localized yet
                             pass
+                # ---- 3D view: every frame in the map frame (frame list refreshed every 2 s)
+                if now_t - frames_listed_t > 2.0:
+                    frames_listed_t = now_t
+                    try:
+                        frame_names = sorted((yaml.safe_load(buf.all_frames_as_yaml()) or {}).keys())
+                    except Exception:  # noqa: BLE001
+                        frame_names = []
+                fr = {"map": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]}
+                for f in frame_names:
+                    try:
+                        tf = buf.lookup_transform("map", f, rclpy.time.Time())
+                        t, q = tf.transform.translation, tf.transform.rotation
+                        fr[f] = [round(t.x, 4), round(t.y, 4), round(t.z, 4), round(q.x, 5), round(q.y, 5), round(q.z, 5), round(q.w, 5)]
+                    except Exception:  # noqa: BLE001 — frame not connected to map (yet)
+                        pass
+                STATE["frames"] = fr
+                polys_out = {}
+                for pname, pm in list(polys.items()):
+                    f2 = _frame2d(pm.header.frame_id)
+                    if f2 is None:
+                        continue
+                    tx_, ty_, yaw_ = f2
+                    c_, s_ = math.cos(yaw_), math.sin(yaw_)
+                    polys_out[pname] = {"frame": pm.header.frame_id,
+                                        "pts": [[round(tx_ + p.x * c_ - p.y * s_, 3), round(ty_ + p.x * s_ + p.y * c_, 3)] for p in pm.polygon.points]}
+                STATE["nav"]["polygons"] = polys_out
+                pc_ = latest.get("particles")
+                if pc_ is not None and now_t - STATE["want3d"].get("particles", 0) < 3.0:
+                    ps = pc_.particles
+                    step = max(1, len(ps) // 1500)
+                    STATE["particles"] = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3), round(_yaw(p.pose.orientation), 3)]
+                                          for p in ps[::step]]
+                while STATE["publish_q"]:
+                    req = STATE["publish_q"].pop(0)
+                    stamp = node.get_clock().now().to_msg()
+                    qz, qw = math.sin(req["yaw"] / 2), math.cos(req["yaw"] / 2)
+                    if req["type"] == "goal":
+                        g = PoseStamped()
+                        g.header.frame_id, g.header.stamp = "map", stamp
+                        g.pose.position.x, g.pose.position.y = req["x"], req["y"]
+                        g.pose.orientation.z, g.pose.orientation.w = qz, qw
+                        goal_pub.publish(g)
+                    else:
+                        ip = PoseWithCovarianceStamped()
+                        ip.header.frame_id, ip.header.stamp = "map", stamp
+                        ip.pose.pose.position.x, ip.pose.pose.position.y = req["x"], req["y"]
+                        ip.pose.pose.orientation.z, ip.pose.pose.orientation.w = qz, qw
+                        cov = [0.0] * 36
+                        cov[0] = cov[7] = 0.25
+                        cov[35] = 0.0685
+                        ip.pose.covariance = cov
+                        init_pub.publish(ip)
+                    STATE["published"] = {**req, "t": time.time()}
             try:
                 tf = buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
                 t, q = tf.transform.translation, tf.transform.rotation
@@ -342,15 +457,76 @@ def run_tool(tool: str, name: str, args: dict) -> str:
 
 
 # --------------------------------------------------------------------------- http
+# --------------------------------------------------------------------------- 3D view helpers
+def cloud_bin(name: str, max_points: int) -> "bytes | None":
+    """One scan / cloud as a binary blob: u32 little-endian header length, a JSON header (frame, n, the
+    frame's pose in the map frame, stamp), then n x [x, y, z, intensity] float32 in the SENSOR frame."""
+    import numpy as np
+
+    m = STATE["latest"].get(name)
+    if m is None:
+        return None
+    if name in CLOUD_TOPICS:
+        from sensor_msgs_py import point_cloud2 as pc2
+
+        names = [f.name for f in m.fields]
+        want = ["x", "y", "z"] + (["intensity"] if "intensity" in names else [])
+        arr = pc2.read_points(m, field_names=want, skip_nans=True)
+        step = max(1, int(math.ceil(len(arr) / max(1, max_points))))
+        arr = arr[::step]
+        out = np.empty((len(arr), 4), np.float32)
+        out[:, 0], out[:, 1], out[:, 2] = arr["x"], arr["y"], arr["z"]
+        out[:, 3] = arr["intensity"] if "intensity" in want else 0.0
+    else:
+        r = np.asarray(m.ranges, dtype=np.float32)
+        ang = (m.angle_min + np.arange(len(r)) * m.angle_increment).astype(np.float32)
+        ok = np.isfinite(r) & (r > max(0.02, m.range_min)) & (r < min(60.0, m.range_max or 60.0))
+        inten = np.asarray(m.intensities, dtype=np.float32) if len(m.intensities) == len(r) else np.zeros(len(r), np.float32)
+        r, ang, inten = r[ok], ang[ok], inten[ok]
+        out = np.stack([r * np.cos(ang), r * np.sin(ang), np.zeros_like(r), inten], 1).astype(np.float32)
+    hdr = json.dumps({"name": name, "frame": m.header.frame_id, "n": int(len(out)), "fields": ["x", "y", "z", "i"],
+                      "stamp": f"{m.header.stamp.sec}.{m.header.stamp.nanosec:09d}",
+                      "tf": STATE["frames"].get(m.header.frame_id)}).encode()
+    hdr += b" " * ((-(4 + len(hdr))) % 4)          # keep the float32 block 4-byte aligned
+    return len(hdr).to_bytes(4, "little") + hdr + out.tobytes()
+
+
+_share_cache: dict = {}
+
+
+def mesh_file(pkg: str, rel: str) -> "Path | None":
+    """package://<pkg>/<rel> -> the file in that package's share directory (ament index), or None."""
+    if pkg not in _share_cache:
+        try:
+            from ament_index_python.packages import get_package_share_directory
+
+            _share_cache[pkg] = Path(get_package_share_directory(pkg)).resolve()
+        except Exception:  # noqa: BLE001
+            _share_cache[pkg] = None
+    base = _share_cache[pkg]
+    if base is None:
+        return None
+    # normalise WITHOUT following symlinks: a --symlink-install share dir points into src/, so a resolved
+    # path would never sit under the share dir; the ".." check happens on the lexical path instead
+    p = Path(os.path.normpath(str(base / rel)))
+    return p if str(p).startswith(str(base) + os.sep) and p.is_file() else None
+
+
+def static_file(rel: str) -> "Path | None":
+    base = (HERE / "static").resolve()
+    p = (base / rel).resolve()
+    return p if base in p.parents and p.is_file() else None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):  # quiet
         pass
 
-    def _send(self, code: int, body: bytes, ctype: str = "application/json") -> None:
+    def _send(self, code: int, body: bytes, ctype: str = "application/json", cache: int = 0) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", f"max-age={cache}" if cache else "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -390,6 +566,43 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"scans": {k: v for k, v in STATE["scans"].items()
                                       if now - v["t"] < 3.0 and (not names or k in names)},
                             "topics": {**SCAN_TOPICS, **CLOUD_TOPICS}, "ros": STATE["ros"]})
+            # ---- 3D view
+            elif u.path == "/3d":
+                self._send(200, (HERE / "map3d.html").read_bytes(), "text/html; charset=utf-8")
+            elif u.path.startswith("/static/"):
+                p = static_file(u.path[len("/static/"):])
+                if p:
+                    self._send(200, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"), cache=3600)
+                else:
+                    self._send(404, b"not found", "text/plain")
+            elif u.path.startswith("/mesh/"):
+                parts = u.path[len("/mesh/"):].split("/", 1)
+                p = mesh_file(parts[0], parts[1]) if len(parts) == 2 else None
+                if p:
+                    self._send(200, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"), cache=86400)
+                else:
+                    self._send(404, b"no such mesh", "text/plain")
+            elif u.path == "/api/urdf":
+                if STATE["urdf"]:
+                    self._send(200, STATE["urdf"].encode(), "application/xml", cache=60)
+                else:
+                    self._json({"error": "no /robot_description received yet (is the base launch running?)"}, 503)
+            elif u.path == "/api/tf":
+                self._json({"frames": STATE["frames"], "joints": STATE["joints"], "t": time.time(), "ros": STATE["ros"],
+                            "published": STATE["published"]})
+            elif u.path == "/api/cloud.bin":
+                name = q.get("name", "velodyne")
+                b = cloud_bin(name, int(q.get("max", CLOUD_BIN_MAX)))
+                if b:
+                    self._send(200, b, "application/octet-stream")
+                else:
+                    self._json({"error": f"no {name} data yet"}, 404)
+            elif u.path == "/api/nav":
+                nav = dict(STATE["nav"])
+                if q.get("particles"):
+                    STATE["want3d"]["particles"] = time.time()
+                    nav["particles"] = STATE["particles"]
+                self._json(nav)
             else:
                 self._send(404, b"not found", "text/plain")
         except Exception as e:  # noqa: BLE001
@@ -401,6 +614,15 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}") if n else {}
         try:
+            if u.path == "/api/publish":          # the 3D page's "nav goal" / "initial pose" click tools
+                kind = body.get("type")
+                if kind not in ("goal", "initialpose") or STATE["ros"] != "ok":
+                    self._json({"error": "type must be goal|initialpose and ROS must be up"}, 400)
+                    return
+                req = {"type": kind, "x": float(body["x"]), "y": float(body["y"]), "yaw": float(body.get("yaw", 0.0))}
+                STATE["publish_q"].append(req)
+                self._json({"ok": True, "queued": req})
+                return
             name = q.get("name") or body.get("name") or ""
             if not name or "/" in name or name.startswith("."):
                 self._json({"error": "bad route name"}, 400)

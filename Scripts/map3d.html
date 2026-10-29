@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RD 3D</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg: #15171c; --panel: #1f2229; --line: #343846; --fg: #e8e9ee; --muted: #9aa0ad; --accent: #4f8cff; --ok: #2ea043; --danger: #c93c3c; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #side { width: 300px; background: var(--panel); border-right: 1px solid var(--line); padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  #side h2 { margin: 0; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
+  #side h3 { margin: 6px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+  label.cb { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  input[type=number], select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; }
+  input[type=number] { width: 60px; }
+  button { background: #2a2e38; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .muted { color: var(--muted); } .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  #view { flex: 1; position: relative; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none; }
+  #hint { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 520px; }
+  #toolbar { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
+  #toolbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #out { white-space: pre-wrap; font-size: 11px; color: var(--muted); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/static/vendor/three.module.min.js",
+               "three/examples/jsm/": "/static/vendor/jsm/",
+               "three/addons/": "/static/vendor/jsm/" } }
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h2>3D <span><button onclick="location.href='/?view=map'">2D map</button></span></h2>
+    <h3>Scene</h3>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-map" checked> map</label>
+      <label class="cb"><input type="checkbox" id="l-grid" checked> grid</label>
+      <label class="cb"><input type="checkbox" id="l-global" checked> global costmap</label>
+      <label class="cb"><input type="checkbox" id="l-local"> local costmap</label>
+      <label class="cb">opacity <input type="number" id="cmalpha" value="40" min="5" max="100" step="5"> %</label>
+    </div>
+    <h3>Sensors</h3>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-velodyne" checked><span class="sw" style="background:linear-gradient(90deg,#3030ff,#30ff30,#ff3030)"></span>Velodyne</label>
+      <select id="cloudcolor"><option value="height">colour: height</option><option value="intensity">colour: intensity</option><option value="flat">colour: flat</option></select>
+    </div>
+    <div class="row">
+      <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> px</label>
+      <label class="cb">rate <input type="number" id="cloudhz" value="4" min="1" max="10" step="1"> Hz</label>
+      <label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> pts</label>
+    </div>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-s1"><span class="sw" style="background:#f5d033"></span>S1</label>
+      <label class="cb"><input type="checkbox" id="l-s2e" checked><span class="sw" style="background:#39d353"></span>S2E</label>
+    </div>
+    <h3>Robot</h3>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-robot" checked> robot model (URDF)</label>
+      <label class="cb"><input type="checkbox" id="l-frames"> TF frames</label>
+      <label class="cb"><input type="checkbox" id="follow" checked> follow robot</label>
+    </div>
+    <h3>Navigation</h3>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-plan" checked><span class="sw" style="background:#39d353"></span>plan</label>
+      <label class="cb"><input type="checkbox" id="l-localplan" checked><span class="sw" style="background:#4fd6ff"></span>local plan</label>
+      <label class="cb"><input type="checkbox" id="l-goal" checked><span class="sw" style="background:#ff4040"></span>goal</label>
+      <label class="cb"><input type="checkbox" id="l-poly" checked><span class="sw" style="background:#b98cff"></span>footprint / polygons</label>
+      <label class="cb"><input type="checkbox" id="l-particles"><span class="sw" style="background:#8ab4ff"></span>AMCL particles</label>
+    </div>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" style="background:#fabe17"></span>route</label>
+      <select id="routes"></select>
+    </div>
+    <h3>Camera</h3>
+    <div class="row">
+      <button id="cam-reset">reset</button><button id="cam-top">top-down</button><button id="cam-robot">look at robot</button>
+    </div>
+    <div id="out" class="mono"></div>
+    <div class="muted" style="margin-top:auto; font-size:11px">three.js + urdf-loader, served from the robot (no internet needed). Data: route_editor.py on :8092.</div>
+  </div>
+  <div id="view">
+    <canvas id="c"></canvas>
+    <div id="status">starting…</div>
+    <div id="toolbar"><button id="t-orbit" class="on" title="left drag = orbit · right drag = pan · wheel = zoom">orbit</button><button id="t-goal" title="click the floor, drag for the heading, release = publish /goal_pose">nav goal</button><button id="t-init" title="click the floor, drag for the heading, release = publish /initialpose">initial pose</button></div>
+    <div id="hint">left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading</div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import URDFLoader from '/static/vendor/urdf/URDFLoader.js';
+
+const $ = (s) => document.querySelector(s);
+const on = (id) => $(id).checked;
+const out = (t) => { $("#out").textContent = t; };
+
+// ---------------------------------------------------------------- renderer / scene / camera
+const canvas = $("#c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15171c);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 600);
+camera.up.set(0, 0, 1);                                   // ROS: z up
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.12; controls.screenSpacePanning = false;
+controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3f55, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.0); sun.position.set(6, -8, 14); scene.add(sun);
+
+const grid = new THREE.GridHelper(60, 60, 0x4b5265, 0x2b2f3b);
+grid.rotation.x = Math.PI / 2; grid.position.z = 0.03; grid.material.depthWrite = false; grid.material.transparent = true; grid.material.opacity = 0.7;
+scene.add(grid);
+const axes = new THREE.AxesHelper(1); axes.position.z = 0.035; scene.add(axes);
+
+function resize() {
+  const r = $("#view").getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height); camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe($("#view")); resize();
+
+// view like the Foxglove layout: perspective, distance 16 m, 28° from vertical, azimuth 122°
+function setView(target, distance = 16, phiDeg = 28, thetaDeg = 122) {
+  const phi = phiDeg * Math.PI / 180, th = thetaDeg * Math.PI / 180;
+  controls.target.copy(target);
+  camera.position.set(target.x + distance * Math.sin(phi) * Math.cos(th), target.y + distance * Math.sin(phi) * Math.sin(th), target.z + distance * Math.cos(phi));
+  controls.update();
+}
+
+// ---------------------------------------------------------------- state
+let MAP = null, pose = null, robotPos = new THREE.Vector3(), frames = {}, joints = {}, viewInit = false;
+let robotModel = null, urdfState = "loading";
+const stats = { cloud: {}, tfHz: 0, tfN: 0, tfT: performance.now(), fps: 0, fN: 0, fT: performance.now() };
+
+// ---------------------------------------------------------------- map plane (+ costmaps)
+const texLoader = new THREE.TextureLoader();
+function groundPlane(meta, z, opacity) {
+  const W = meta.width * meta.resolution, H = meta.height * meta.resolution;
+  const g = new THREE.PlaneGeometry(W, H).translate(W / 2, H / 2, 0);     // corner at the origin
+  const m = new THREE.MeshBasicMaterial({ transparent: true, opacity, depthWrite: false });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(meta.origin[0], meta.origin[1], z); mesh.rotation.z = meta.yaw || 0;
+  mesh.userData.size = [meta.width, meta.height];
+  return mesh;
+}
+function setTexture(mesh, url, cb) {
+  texLoader.load(url, (t) => {
+    t.magFilter = THREE.NearestFilter; t.minFilter = THREE.LinearFilter; t.colorSpace = THREE.SRGBColorSpace;
+    if (mesh.material.map) mesh.material.map.dispose();
+    mesh.material.map = t; mesh.material.needsUpdate = true; if (cb) cb();
+  });
+}
+let mapMesh = null;
+const costmaps = {};                                      // name -> {mesh, stamp}
+
+// ---------------------------------------------------------------- point clouds
+const LUT = Array.from({ length: 256 }, (_, i) => new THREE.Color().setHSL((1 - i / 255) * 0.667, 1, 0.5));
+const CLOUD_FLAT = { velodyne: new THREE.Color(0xe85cff), s1: new THREE.Color(0xf5d033), s2e: new THREE.Color(0x39d353) };
+const clouds = {};
+for (const name of ["velodyne", "s1", "s2e"]) {
+  const pts = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }));
+  pts.frustumCulled = false; pts.visible = false; scene.add(pts); clouds[name] = pts;
+}
+function quatMat(x, y, z, w) {
+  const xx = x * x, yy = y * y, zz = z * z, xy = x * y, xz = x * z, yz = y * z, wx = w * x, wy = w * y, wz = w * z;
+  return [1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy), 2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx), 2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)];
+}
+async function fetchCloud(name) {
+  const r = await fetch(`/api/cloud.bin?name=${name}&max=${parseInt($("#cloudmax").value) || 20000}`);
+  if (!r.ok) { stats.cloud[name] = "no data"; return; }
+  const buf = await r.arrayBuffer();
+  const hl = new DataView(buf).getUint32(0, true);
+  const hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+  const f = new Float32Array(buf, 4 + hl, hdr.n * 4);
+  if (!hdr.tf) { stats.cloud[name] = `no TF map->${hdr.frame}`; return; }
+  const [tx, ty, tz, qx, qy, qz, qw] = hdr.tf, R = quatMat(qx, qy, qz, qw);
+  const n = hdr.n, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  const mode = name === "velodyne" ? $("#cloudcolor").value : "flat", flat = CLOUD_FLAT[name];
+  const z0 = -0.1, z1 = 2.2;
+  for (let i = 0; i < n; i++) {
+    const x = f[i * 4], y = f[i * 4 + 1], z = f[i * 4 + 2], it = f[i * 4 + 3];
+    const wx = tx + R[0] * x + R[1] * y + R[2] * z, wy = ty + R[3] * x + R[4] * y + R[5] * z, wz = tz + R[6] * x + R[7] * y + R[8] * z;
+    pos[i * 3] = wx; pos[i * 3 + 1] = wy; pos[i * 3 + 2] = name === "velodyne" ? wz : wz + 0.02;
+    let c = flat;
+    if (mode === "height") c = LUT[Math.max(0, Math.min(255, Math.round((wz - z0) / (z1 - z0) * 255)))];
+    else if (mode === "intensity") c = LUT[Math.max(0, Math.min(255, Math.round(it)))];
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const old = clouds[name].geometry; clouds[name].geometry = g; old.dispose();
+  stats.cloud[name] = `${n} pts`;
+}
+
+// ---------------------------------------------------------------- robot model + frames
+const robotRing = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.33, 40), new THREE.MeshBasicMaterial({ color: 0x2ea043, side: THREE.DoubleSide }));
+robotRing.position.z = 0.04; scene.add(robotRing);
+const robotHeading = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.5, 0x2ea043, 0.15, 0.1); scene.add(robotHeading);
+const urdfLoader = new URDFLoader();
+urdfLoader.packages = (pkg) => "/mesh/" + pkg;            // package://X/… -> served from X's share directory
+urdfLoader.parseCollision = false;
+function loadUrdf() {
+  urdfLoader.load("/api/urdf", (robot) => {
+    robot.traverse((c) => { if (c.isMesh) { c.castShadow = false; if (c.material && c.material.color && c.material.color.r > 0.95 && c.material.color.g > 0.95 && c.material.color.b > 0.95) c.material.color.setHex(0xb8bcc8); } });
+    robotModel = robot; scene.add(robot); urdfState = `URDF: ${Object.keys(robot.links).length} links, ${Object.keys(robot.joints).length} joints`;
+  }, undefined, (e) => { urdfState = "URDF not available yet (retrying)"; setTimeout(loadUrdf, 5000); });
+}
+loadUrdf();
+const frameAxes = new THREE.Group(); frameAxes.visible = false; scene.add(frameAxes);
+const frameObjs = {};
+function updateFrames() {
+  for (const [name, f] of Object.entries(frames)) {
+    let o = frameObjs[name];
+    if (!o) { o = new THREE.AxesHelper(0.2); frameObjs[name] = o; frameAxes.add(o); }
+    o.position.set(f[0], f[1], f[2]); o.quaternion.set(f[3], f[4], f[5], f[6]);
+  }
+}
+
+// ---------------------------------------------------------------- navigation overlays
+function lineObj(color, width) { const l = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color })); l.frustumCulled = false; scene.add(l); return l; }
+const planLine = lineObj(0x39d353), localPlanLine = lineObj(0x4fd6ff), routeLine = lineObj(0xfabe17);
+const polyLines = {}; const POLY_COLORS = { footprint: 0xb98cff, stop: 0xff4040, slowdown: 0xffa040 };
+const goalArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.7, 0xff4040, 0.25, 0.15); goalArrow.visible = false; scene.add(goalArrow);
+const particles = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x8ab4ff, transparent: true, opacity: 0.7 })); particles.frustumCulled = false; scene.add(particles);
+const routePts = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, vertexColors: true })); routePts.frustumCulled = false; scene.add(routePts);
+function setLine(line, pts, z) {
+  if (!pts || pts.length < 2) { line.visible = false; return; }
+  line.geometry.dispose(); line.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z + (p[2] || 0))));
+  line.visible = true;
+}
+function setLoop(name, pts, z) {
+  let l = polyLines[name];
+  if (!l) { l = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: POLY_COLORS[name] || 0xffffff })); l.frustumCulled = false; scene.add(l); polyLines[name] = l; }
+  if (!pts || pts.length < 3) { l.visible = false; return; }
+  l.geometry.dispose(); l.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z))); l.visible = true;
+}
+const isMarked = (w) => !/^(wp_|x_|start$|here_)/.test(w.name) || (w.post_actions && w.post_actions.length);
+async function loadRoute(name) {
+  if (!name) { routeLine.visible = false; routePts.visible = false; return; }
+  const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then((r) => r.json());
+  const W = d.waypoints || [];
+  setLine(routeLine, W.map((w) => [w.x, w.y, 0]), 0.05);
+  const pos = new Float32Array(W.length * 3), col = new Float32Array(W.length * 3);
+  W.forEach((w, i) => { pos[i * 3] = w.x; pos[i * 3 + 1] = w.y; pos[i * 3 + 2] = 0.06; const c = new THREE.Color(isMarked(w) ? 0xe04848 : 0x4f8cff); col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; });
+  routePts.geometry.dispose(); const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("color", new THREE.BufferAttribute(col, 3)); routePts.geometry = g;
+  routePts.visible = W.length > 0;
+}
+
+// ---------------------------------------------------------------- click tools (nav goal / initial pose)
+let tool = "orbit", dragStart = null;
+const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const preview = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.8, 0xffffff, 0.25, 0.15); preview.visible = false; scene.add(preview);
+function floorPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera); const p = new THREE.Vector3();
+  return ray.ray.intersectPlane(floor, p) ? p : null;
+}
+function setTool(t) {
+  tool = t; controls.enabled = t === "orbit"; dragStart = null; preview.visible = false;
+  for (const id of ["orbit", "goal", "init"]) $(`#t-${id}`).classList.toggle("on", id === t);
+  canvas.style.cursor = t === "orbit" ? "" : "crosshair";
+  $("#hint").textContent = t === "orbit" ? "left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading"
+    : `${t === "goal" ? "NAV GOAL" : "INITIAL POSE"}: click the floor, drag for the heading, release to publish (${t === "goal" ? "/goal_pose — the robot will drive there" : "/initialpose"}); Esc cancels`;
+}
+$("#t-orbit").onclick = () => setTool("orbit"); $("#t-goal").onclick = () => setTool("goal"); $("#t-init").onclick = () => setTool("init");
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") setTool("orbit"); });
+canvas.addEventListener("pointerdown", (e) => {
+  if (tool === "orbit" || e.button !== 0) return;
+  const p = floorPoint(e); if (!p) return;
+  dragStart = p; preview.position.set(p.x, p.y, 0.05); preview.setDirection(new THREE.Vector3(1, 0, 0)); preview.visible = true; canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragStart) return;
+  const p = floorPoint(e); if (!p) return;
+  const dx = p.x - dragStart.x, dy = p.y - dragStart.y;
+  if (Math.hypot(dx, dy) > 0.05) preview.setDirection(new THREE.Vector3(dx, dy, 0).normalize());
+});
+canvas.addEventListener("pointerup", async (e) => {
+  if (!dragStart) return;
+  const p = floorPoint(e) || dragStart, dx = p.x - dragStart.x, dy = p.y - dragStart.y;
+  const yaw = Math.hypot(dx, dy) > 0.05 ? Math.atan2(dy, dx) : 0;
+  const body = { type: tool === "goal" ? "goal" : "initialpose", x: +dragStart.x.toFixed(3), y: +dragStart.y.toFixed(3), yaw: +yaw.toFixed(4) };
+  setTool("orbit");
+  try { const r = await fetch("/api/publish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    out(r.error ? `publish failed: ${r.error}` : `published ${body.type}: (${body.x}, ${body.y}) ${(yaw * 180 / Math.PI).toFixed(0)}°`); } catch (err) { out(`publish failed: ${err}`); }
+});
+
+// ---------------------------------------------------------------- polling (each loop survives its own errors)
+async function loop(fn, ms) { try { await fn(); } catch (e) { console.warn(fn.name, e); } setTimeout(() => loop(fn, ms), typeof ms === "function" ? ms() : ms); }
+
+async function pollTf() {
+  const d = await fetch("/api/tf").then((r) => r.json());
+  frames = d.frames || {}; joints = d.joints || {};
+  stats.tfN++; const now = performance.now(); if (now - stats.tfT > 2000) { stats.tfHz = stats.tfN / ((now - stats.tfT) / 1000); stats.tfN = 0; stats.tfT = now; }
+  const bf = frames.base_footprint || frames.base_link;
+  if (bf) {
+    const prev = robotPos.clone(); robotPos.set(bf[0], bf[1], bf[2]);
+    const yaw = Math.atan2(2 * (bf[6] * bf[5] + bf[3] * bf[4]), 1 - 2 * (bf[4] * bf[4] + bf[5] * bf[5]));
+    pose = { x: bf[0], y: bf[1], yaw };
+    robotRing.position.set(bf[0], bf[1], 0.04); robotHeading.position.set(bf[0], bf[1], 0.05); robotHeading.setDirection(new THREE.Vector3(Math.cos(yaw), Math.sin(yaw), 0));
+    if (!viewInit) { setView(robotPos.clone()); viewInit = true; }
+    else if (on("#follow")) { const d_ = robotPos.clone().sub(prev); controls.target.add(d_); camera.position.add(d_); }
+  } else { pose = null; }
+  if (robotModel) {
+    const root = frames[robotModel.urdfName] || frames.base_link;
+    if (root) { robotModel.position.set(root[0], root[1], root[2]); robotModel.quaternion.set(root[3], root[4], root[5], root[6]); }
+    for (const [n, v] of Object.entries(joints)) if (robotModel.joints[n]) robotModel.setJointValue(n, v);
+  }
+  if (on("#l-frames")) updateFrames();
+  if (d.published && d.published.t > (pollTf.lastPub || 0)) { pollTf.lastPub = d.published.t; }
+}
+async function pollClouds() {
+  for (const name of ["velodyne", "s1", "s2e"]) if (on(`#l-${name}`)) await fetchCloud(name);
+}
+async function pollNav() {
+  const d = await fetch(`/api/nav${on("#l-particles") ? "?particles=1" : ""}`).then((r) => r.json());
+  setLine(planLine, d.plan && d.plan.pts, 0.05); setLine(localPlanLine, d.local_plan && d.local_plan.pts, 0.06);
+  if (d.goal) { goalArrow.position.set(d.goal.x, d.goal.y, 0.05); goalArrow.setDirection(new THREE.Vector3(Math.cos(d.goal.yaw), Math.sin(d.goal.yaw), 0)); goalArrow.visible = on("#l-goal"); }
+  for (const [name, pg] of Object.entries(d.polygons || {})) setLoop(name, pg.pts, 0.07);
+  if (d.particles) {
+    const n = d.particles.length, pos = new Float32Array(n * 6);
+    d.particles.forEach((p, i) => { pos[i * 6] = p[0]; pos[i * 6 + 1] = p[1]; pos[i * 6 + 2] = 0.04; pos[i * 6 + 3] = p[0] + 0.12 * Math.cos(p[2]); pos[i * 6 + 4] = p[1] + 0.12 * Math.sin(p[2]); pos[i * 6 + 5] = 0.04; });
+    particles.geometry.dispose(); const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); particles.geometry = g; particles.visible = true;
+  } else particles.visible = false;
+}
+async function pollCostmaps() {
+  for (const name of ["global", "local"]) {
+    if (!on(`#l-${name}`)) { if (costmaps[name]) costmaps[name].mesh.visible = false; continue; }
+    const meta = await fetch(`/api/costmap?name=${name}`).then((r) => r.json());
+    if (meta.error) continue;
+    let cm = costmaps[name];
+    if (!cm) { cm = { mesh: groundPlane(meta, name === "global" ? 0.01 : 0.02, 0.4), stamp: null }; scene.add(cm.mesh); costmaps[name] = cm; }
+    cm.mesh.position.set(meta.origin[0], meta.origin[1], cm.mesh.position.z); cm.mesh.rotation.z = meta.yaw || 0;
+    if (cm.mesh.userData.size[0] !== meta.width || cm.mesh.userData.size[1] !== meta.height) {   // size changed: rebuild
+      scene.remove(cm.mesh); cm.mesh.geometry.dispose(); cm.mesh = groundPlane(meta, cm.mesh.position.z, 0.4); scene.add(cm.mesh); cm.stamp = null;
+    }
+    cm.mesh.material.opacity = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 40) / 100));
+    if (cm.stamp !== meta.stamp) { cm.stamp = meta.stamp; setTexture(cm.mesh, meta.image, () => { cm.mesh.visible = true; }); }
+    cm.mesh.visible = !!cm.mesh.material.map;
+  }
+}
+async function loadRoutes() {
+  const d = await fetch("/api/routes").then((r) => r.json());
+  const s = $("#routes"); s.innerHTML = `<option value="">(none)</option>` + d.routes.map((n) => `<option>${n}</option>`).join("");
+  const pre = ["tigger_test", "tigger"].find((n) => d.routes.includes(n)); if (pre) s.value = pre;
+  await loadRoute(s.value);
+}
+$("#routes").onchange = () => loadRoute($("#routes").value);
+for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-poly", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
+$("#ptsize").onchange = () => { for (const p of Object.values(clouds)) p.material.size = parseFloat($("#ptsize").value) || 2; };
+$("#cam-reset").onclick = () => setView(pose ? robotPos.clone() : new THREE.Vector3(MAP ? MAP.origin[0] + MAP.width * MAP.resolution / 2 : 0, MAP ? MAP.origin[1] + MAP.height * MAP.resolution / 2 : 0, 0));
+$("#cam-top").onclick = () => setView(controls.target.clone(), camera.position.distanceTo(controls.target), 0.01, 90);
+$("#cam-robot").onclick = () => { if (pose) setView(robotPos.clone(), 8, 35, pose.yaw * 180 / Math.PI + 180); };
+function applyVisibility() {
+  if (mapMesh) mapMesh.visible = on("#l-map");
+  grid.visible = on("#l-grid"); axes.visible = on("#l-grid");
+  if (robotModel) robotModel.visible = on("#l-robot");
+  robotRing.visible = robotHeading.visible = !(robotModel && on("#l-robot"));
+  frameAxes.visible = on("#l-frames");
+  planLine.visible = planLine.visible && on("#l-plan"); localPlanLine.visible = localPlanLine.visible && on("#l-localplan");
+  goalArrow.visible = goalArrow.visible && on("#l-goal");
+  for (const l of Object.values(polyLines)) l.visible = l.visible && on("#l-poly");
+  routeLine.visible = routePts.visible = on("#l-route") && routePts.geometry.attributes.position && routePts.geometry.attributes.position.count > 0;
+  for (const [n, p] of Object.entries(clouds)) p.visible = on(`#l-${n}`);
+}
+
+// ---------------------------------------------------------------- render loop + status
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update(); renderer.render(scene, camera);
+  stats.fN++; const now = performance.now(); if (now - stats.fT > 1000) { stats.fps = stats.fN; stats.fN = 0; stats.fT = now; }
+  $("#status").textContent = `${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
+    Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps`;
+}
+
+(async () => {
+  MAP = await fetch("/api/map").then((r) => r.json());
+  mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setTexture(mapMesh, MAP.image);
+  setView(new THREE.Vector3(MAP.origin[0] + MAP.width * MAP.resolution / 2, MAP.origin[1] + MAP.height * MAP.resolution / 2, 0), 28, 30, 122);
+  loadRoutes().catch(() => {});
+  loop(pollTf, 100); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
+  applyVisibility(); animate();
+})();
+</script>
+</body>
+</html>
