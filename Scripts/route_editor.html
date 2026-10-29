@@ -115,7 +115,7 @@
 const $ = s => document.querySelector(s);
 const canvas = $("#c"), ctx = canvas.getContext("2d");
 let MAP = null, img = new Image(), route = {name: "", waypoints: [], initial_pose: null, raw_trace: []};
-let sel = -1, pose = null, rosStatus = "";
+let sel = -1, pose = null, rosStatus = "", obstacles = [];          // obstacles: the simulator's cones
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
 let mode = new URLSearchParams(location.search).get("view") === "map" ? "map" : "edit";
 let scans = {};                                 // name -> {points: [[x,y],...], t}
@@ -197,6 +197,12 @@ function draw() {
     if (!on.has(name)) continue;
     ctx.fillStyle = SCAN_COLORS[name] || "#fff"; const r2 = Math.max(1.2, view.scale * (name === "velodyne" ? 0.45 : 0.6));
     for (const p of sc.points) { const [a, b] = w2c(p[0], p[1]); ctx.fillRect(a - r2 / 2, b - r2 / 2, r2, r2); }
+  }
+  // simulated cones (orange discs, true radius)
+  for (const o of obstacles) {
+    const [a, b] = w2c(o.x, o.y); const R = Math.max(3, o.r / MAP.resolution * view.scale);
+    ctx.fillStyle = "rgba(255,106,0,.85)"; ctx.beginPath(); ctx.arc(a, b, R, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(a, b, R * 0.5, 0, Math.PI * 2); ctx.stroke();
   }
   // route polyline
   const W = $("#showroute").checked ? route.waypoints : [];
@@ -337,7 +343,7 @@ async function pollScans() {
   const want = layersOn();
   if (want.length) {
     try {
-      const d = await fetch("/api/scans?layers=" + want.join(",")).then(r => r.json()); scans = d.scans || {};
+      const d = await fetch("/api/scans?layers=" + want.join(",")).then(r => r.json()); scans = d.scans || {}; obstacles = d.obstacles || [];
       $("#scaninfo").textContent = want.map(n => `${n}: ${scans[n] ? scans[n].points.length + " pts" : "no data"}`).join(" · ");
     } catch (e) { scans = {}; }
     draw();

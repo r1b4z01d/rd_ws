@@ -94,6 +94,11 @@
     </div>
     <h3>Cameras</h3>
     <div class="row" id="cam-panel"></div>
+    <div id="sim-panel" hidden>
+      <h3>Simulation</h3>
+      <div class="row"><span class="muted" id="cone-info">no cones</span><button id="cone-front">+ cone ahead</button><button id="cone-clear">clear cones</button></div>
+      <div class="muted" style="font-size:11px">cones are seen by the lidars, the Velodyne and the cameras, marked in both costmaps, and trip the stop / slowdown zones — the sim robot stops like the collision monitor does</div>
+    </div>
     <h3>View point</h3>
     <div class="row">
       <button id="cam-reset">reset</button><button id="cam-top">top-down</button><button id="cam-robot">look at robot</button>
@@ -104,7 +109,7 @@
   <div id="view">
     <canvas id="c"></canvas>
     <div id="status">starting…</div>
-    <div id="toolbar"><button id="t-halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button><button id="t-orbit" class="on" title="left drag = orbit · right drag = pan · wheel = zoom">orbit</button><button id="t-goal" title="click the floor, drag for the heading, release = publish /goal_pose">nav goal</button><button id="t-init" title="click the floor, drag for the heading, release = publish /initialpose">initial pose</button></div>
+    <div id="toolbar"><button id="t-halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button><button id="t-orbit" class="on" title="left drag = orbit · right drag = pan · wheel = zoom">orbit</button><button id="t-goal" title="click the floor, drag for the heading, release = publish /goal_pose">nav goal</button><button id="t-init" title="click the floor, drag for the heading, release = publish /initialpose">initial pose</button><button id="t-cone" hidden title="simulation: click the floor to drop a cone; drag a cone to move it (any mode); shift-click a cone to remove it">cone</button></div>
     <div id="hint">left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading</div>
   </div>
 </div>
@@ -288,6 +293,47 @@ async function loadRoute(name) {
   routePts.visible = W.length > 0;
 }
 
+// ---------------------------------------------------------------- simulated obstacles (cones)
+const cones = new THREE.Group(); scene.add(cones);
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const coneMeshes = {};                                   // id -> mesh
+const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a00, roughness: 0.7 });
+const coneBandMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.8 });
+let obstacles = [], coneDrag = null, lastCone = null, isSim = false;
+function coneMesh(o) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.ConeGeometry(o.r, o.h, 24), coneMat); body.rotation.x = Math.PI / 2; body.position.z = o.h / 2; body.userData.coneId = o.id; g.add(body);
+  const band = new THREE.Mesh(new THREE.ConeGeometry(o.r * 0.62, o.h * 0.14, 24), coneBandMat); band.rotation.x = Math.PI / 2; band.position.z = o.h * 0.45; band.userData.coneId = o.id; g.add(band);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(o.r * 1.25, o.r * 1.25, 0.02, 4), coneMat); base.rotation.x = Math.PI / 2; base.rotation.y = Math.PI / 4; base.position.z = 0.01; base.userData.coneId = o.id; g.add(base);
+  g.userData.coneId = o.id; return g;
+}
+function syncCones(list) {
+  obstacles = list || [];
+  const seen = new Set();
+  for (const o of obstacles) {
+    seen.add(o.id);
+    let m = coneMeshes[o.id];
+    if (!m) { m = coneMesh(o); coneMeshes[o.id] = m; cones.add(m); }
+    if (!(coneDrag && coneDrag.id === o.id)) m.position.set(o.x, o.y, 0);
+  }
+  for (const id of Object.keys(coneMeshes)) if (!seen.has(+id)) { cones.remove(coneMeshes[id]); delete coneMeshes[id]; }
+  $("#cone-info").textContent = obstacles.length ? `${obstacles.length} cone${obstacles.length > 1 ? "s" : ""}` : "no cones";
+}
+async function obstacleCmd(body) {
+  try { const r = await fetch("/api/obstacles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json()); if (r.error) out(r.error); }
+  catch (e) { out(`obstacle: ${e}`); }
+}
+function coneUnderPointer(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(cones.children, true)[0];
+  return hit ? hit.object.userData.coneId : null;
+}
+$("#cone-front").onclick = () => { if (pose) obstacleCmd({ action: "add", x: +(pose.x + 1.2 * Math.cos(pose.yaw)).toFixed(3), y: +(pose.y + 1.2 * Math.sin(pose.yaw)).toFixed(3) }); };
+$("#cone-clear").onclick = () => obstacleCmd({ action: "clear" });
+window.addEventListener("keydown", (e) => { if ((e.key === "Delete" || e.key === "Backspace") && lastCone != null && document.activeElement.tagName !== "INPUT") { obstacleCmd({ action: "remove", id: lastCone }); lastCone = null; } });
+
 // ---------------------------------------------------------------- click tools (nav goal / initial pose)
 let tool = "orbit", dragStart = null, halted = false;
 async function haltClick() {
@@ -298,7 +344,7 @@ async function haltClick() {
   } catch (e) { out(`halt failed: ${e}`); }
 }
 $("#t-halt").onclick = haltClick;
-const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 const preview = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.8, 0xffffff, 0.25, 0.15); preview.visible = false; scene.add(preview);
 function floorPoint(e) {
   const r = canvas.getBoundingClientRect();
@@ -308,25 +354,51 @@ function floorPoint(e) {
 }
 function setTool(t) {
   tool = t; controls.enabled = t === "orbit"; dragStart = null; preview.visible = false;
-  for (const id of ["orbit", "goal", "init"]) $(`#t-${id}`).classList.toggle("on", id === t);
+  for (const id of ["orbit", "goal", "init", "cone"]) $(`#t-${id}`).classList.toggle("on", id === t);
   canvas.style.cursor = t === "orbit" ? "" : "crosshair";
-  $("#hint").textContent = t === "orbit" ? "left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading"
+  $("#hint").textContent = t === "orbit" ? "left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading" + (isSim ? " · drag a cone to move it, shift-click to remove" : "")
+    : t === "cone" ? "CONE: click the floor to drop a cone · drag a cone to move it · shift-click a cone to remove it · Esc leaves the tool"
     : `${t === "goal" ? "NAV GOAL" : "INITIAL POSE"}: click the floor, drag for the heading, release to publish (${t === "goal" ? "/goal_pose — the robot will drive there" : "/initialpose"}); Esc cancels`;
 }
-$("#t-orbit").onclick = () => setTool("orbit"); $("#t-goal").onclick = () => setTool("goal"); $("#t-init").onclick = () => setTool("init");
+$("#t-orbit").onclick = () => setTool("orbit"); $("#t-goal").onclick = () => setTool("goal"); $("#t-init").onclick = () => setTool("init"); $("#t-cone").onclick = () => setTool("cone");
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") setTool("orbit"); });
 canvas.addEventListener("pointerdown", (e) => {
-  if (tool === "orbit" || e.button !== 0) return;
+  if (e.button !== 0) return;
+  if (isSim) {                                                    // cones first: draggable in any mode
+    const id = coneUnderPointer(e);
+    if (id != null) {
+      if (e.shiftKey) { obstacleCmd({ action: "remove", id }); return; }
+      const p = floorPoint(e); if (!p) return;
+      const m = coneMeshes[id];
+      coneDrag = { id, dx: m.position.x - p.x, dy: m.position.y - p.y, sent: 0 }; lastCone = id;
+      controls.enabled = false; canvas.setPointerCapture(e.pointerId); return;
+    }
+    if (tool === "cone") { const p = floorPoint(e); if (p) obstacleCmd({ action: "add", x: +p.x.toFixed(3), y: +p.y.toFixed(3) }); return; }
+  }
+  if (tool === "orbit") return;
   const p = floorPoint(e); if (!p) return;
   dragStart = p; preview.position.set(p.x, p.y, 0.05); preview.setDirection(new THREE.Vector3(1, 0, 0)); preview.visible = true; canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointermove", (e) => {
+  if (coneDrag) {
+    const p = floorPoint(e); if (!p) return;
+    const m = coneMeshes[coneDrag.id]; if (!m) { coneDrag = null; return; }
+    m.position.set(p.x + coneDrag.dx, p.y + coneDrag.dy, 0);
+    const now = performance.now();
+    if (now - coneDrag.sent > 100) { coneDrag.sent = now; obstacleCmd({ action: "move", id: coneDrag.id, x: +m.position.x.toFixed(3), y: +m.position.y.toFixed(3) }); }
+    return;
+  }
   if (!dragStart) return;
   const p = floorPoint(e); if (!p) return;
   const dx = p.x - dragStart.x, dy = p.y - dragStart.y;
   if (Math.hypot(dx, dy) > 0.05) preview.setDirection(new THREE.Vector3(dx, dy, 0).normalize());
 });
 canvas.addEventListener("pointerup", async (e) => {
+  if (coneDrag) {
+    const m = coneMeshes[coneDrag.id];
+    if (m) obstacleCmd({ action: "move", id: coneDrag.id, x: +m.position.x.toFixed(3), y: +m.position.y.toFixed(3) });
+    coneDrag = null; controls.enabled = tool === "orbit"; return;
+  }
   if (!dragStart) return;
   const p = floorPoint(e) || dragStart, dx = p.x - dragStart.x, dy = p.y - dragStart.y;
   const yaw = Math.hypot(dx, dy) > 0.05 ? Math.atan2(dy, dx) : 0;
@@ -347,6 +419,7 @@ async function loop(fn, ms) {
 async function pollTf() {
   const d = await fetch("/api/tf").then((r) => r.json());
   frames = d.frames || {}; joints = d.joints || {}; simBadge = d.sim ? "SIM · " : "";
+  if (d.sim !== isSim) { isSim = !!d.sim; $("#t-cone").hidden = !isSim; $("#sim-panel").hidden = !isSim; }
   stats.tfN++; const now = performance.now(); if (now - stats.tfT > 2000) { stats.tfHz = stats.tfN / ((now - stats.tfT) / 1000); stats.tfN = 0; stats.tfT = now; }
   const bf = frames.base_footprint || frames.base_link;
   if (bf) {
@@ -376,6 +449,7 @@ async function pollNav() {
   const alerts = [];
   for (const [name, pg] of Object.entries(d.polygons || {})) { setLoop(name, pg.pts, 0.07, pg.triggered); if (pg.triggered) alerts.push(`${name.toUpperCase()} zone: ${pg.inside} pts`); }
   polyAlert = alerts.join(" · ");
+  if (d.obstacles) syncCones(d.obstacles);
   if (d.particles) {
     const n = d.particles.length, pos = new Float32Array(n * 6);
     d.particles.forEach((p, i) => { pos[i * 6] = p[0]; pos[i * 6 + 1] = p[1]; pos[i * 6 + 2] = 0.04; pos[i * 6 + 3] = p[0] + 0.12 * Math.cos(p[2]); pos[i * 6 + 4] = p[1] + 0.12 * Math.sin(p[2]); pos[i * 6 + 5] = 0.04; });

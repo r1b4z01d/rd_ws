@@ -293,7 +293,9 @@ with no internet needed on the robot:
 pages on a laptop with a simulated robot driving the route (`--sim-route NAME`): scans and a Velodyne
 cloud raycast against the map, costmaps, TF, joints, plans, goal/initial-pose tools, the URDF
 (`sim/robot_sim.urdf` primitives, or the real model after `sim/fetch_assets.sh` with the robot on).
-Needs only numpy, Pillow and PyYAML. The manager follows with
+Movable cones (3D page: `cone` tool drops one, drag to move, shift-click removes; `+ cone ahead`) are seen
+by the simulated lidars / Velodyne / cameras, marked in both costmaps and trip the stop / slowdown zones;
+the sim robot then stops or slows like the collision monitor. Needs only numpy, Pillow and PyYAML. The manager follows with
 `python -m webui.server --port 8081 --route-url http://127.0.0.1:8092/`.
 
 The VLA manager embeds the last two as its Map and 3D tabs. three.js 0.182 and urdf-loader 0.12.6 are

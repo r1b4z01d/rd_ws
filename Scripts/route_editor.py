@@ -753,7 +753,8 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["want"] = {"names": names or list(SCAN_TOPICS) + list(CLOUD_TOPICS), "t": now}
                 self._json({"scans": {k: v for k, v in STATE["scans"].items()
                                       if now - v["t"] < 3.0 and (not names or k in names)},
-                            "topics": {**SCAN_TOPICS, **CLOUD_TOPICS}, "ros": STATE["ros"]})
+                            "topics": {**SCAN_TOPICS, **CLOUD_TOPICS}, "ros": STATE["ros"],
+                            "obstacles": STATE["nav"].get("obstacles") or []})
             # ---- 3D view
             elif u.path == "/3d":
                 self._send(200, (HERE / "map3d.html").read_bytes(), "text/html; charset=utf-8")
@@ -808,6 +809,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, e["data"], "image/jpeg")
                 else:
                     self._send(404, b"no frame yet", "text/plain")
+            elif u.path == "/api/obstacles":
+                self._json({"obstacles": STATE["nav"].get("obstacles") or [], "sim": STATE["sim"]})
             elif u.path == "/api/nav":
                 nav = dict(STATE["nav"])
                 if q.get("particles"):
@@ -825,6 +828,16 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}") if n else {}
         try:
+            if u.path == "/api/obstacles":        # movable cones, simulation only
+                if not STATE["sim"]:
+                    self._json({"error": "obstacles exist only in --sim (the robot's are real)"}, 400)
+                    return
+                if body.get("action") not in ("add", "move", "remove", "clear"):
+                    self._json({"error": "action must be add|move|remove|clear"}, 400)
+                    return
+                STATE["publish_q"].append({"type": "obstacle", **body})
+                self._json({"ok": True})
+                return
             if u.path == "/api/halt":             # the pages' HALT button
                 did = halt(bool(body.get("resume")))
                 self._json({"ok": True, "did": did, "sim": STATE["sim"]})

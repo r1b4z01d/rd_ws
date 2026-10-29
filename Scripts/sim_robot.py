@@ -41,6 +41,7 @@ UR_HOME = [0.0, -1.9, 1.7, -1.4, -1.571, 0.0]
 UR_JOINTS = ["ur_shoulder_pan_joint", "ur_shoulder_lift_joint", "ur_elbow_joint", "ur_wrist_1_joint", "ur_wrist_2_joint", "ur_wrist_3_joint"]
 CEILING = 2.6
 V_MAX, W_MAX = 0.5, 1.0
+CONE_R, CONE_H = 0.22, 0.7            # a traffic cone: base radius, height (sensed as a cone, radius shrinks with height)
 # simulated camera feeds: first-person raycast renders (name -> mount offset x/y on the base, yaw, fov,
 # height above the floor); the wrist camera rides on the arm, so it sways a little
 SIM_CAMS = {"scene": {"xy": (0.22, 0.0), "yaw": 0.0, "fov": 90.0, "h": 0.95},
@@ -194,6 +195,10 @@ class Sim:
         self.halted = False
         self.frozen_joints = None
         self.scan_full: dict = {}                     # name -> full-resolution map-frame scan points
+        self.obstacles: list = []                     # movable cones: {id, x, y, r, h}
+        self._obs_seq = 0
+        self.global_stamp = 0
+        self.poly_state: dict = {}                    # name -> triggered (the sim stops like the collision monitor)
         self.t0 = time.time()
         self.wheel = [0.0, 0.0]
         self.rng = np.random.default_rng(1)
@@ -211,6 +216,65 @@ class Sim:
             self.S["urdf"] = self.urdf
         self.S["frame_tf"]["odom"] = MAP_TO_ODOM
         self.S["sim"] = True
+
+    # ------------------------------------------------------------------ obstacles (sim only)
+    def obstacle_ranges(self, x, y, angles, z_at):
+        """Range along each world angle to the first cone, inf where none. `z_at(d)` gives the beam's
+        height above the floor at horizontal distance d (a lidar: constant; a Velodyne ring: rising)."""
+        out = np.full(len(angles), np.inf, np.float32)
+        if not self.obstacles:
+            return out
+        ca, sa = np.cos(angles), np.sin(angles)
+        for o in self.obstacles:
+            dx, dy = o["x"] - x, o["y"] - y
+            along = dx * ca + dy * sa
+            perp = -dx * sa + dy * ca
+            r0 = o["r"]
+            with np.errstate(invalid="ignore"):
+                d = along - np.sqrt(np.maximum(r0 * r0 - perp * perp, 0.0))
+            z = z_at(np.maximum(d, 0.0))
+            r_at = r0 * np.clip(1.0 - z / o["h"], 0.0, 1.0)              # a cone narrows towards the tip
+            hit = (along > 0) & (np.abs(perp) < r_at) & (z >= 0.0) & (z <= o["h"]) & (d > 0.05)
+            out = np.where(hit & (d < out), d, out).astype(np.float32)
+        return out
+
+    def apply_obstacle(self, req):
+        a = req.get("action")
+        if a == "clear":
+            self.obstacles = []
+        elif a == "add":
+            self._obs_seq += 1
+            self.obstacles.append({"id": self._obs_seq, "x": float(req["x"]), "y": float(req["y"]),
+                                   "r": float(req.get("r", CONE_R)), "h": float(req.get("h", CONE_H)), "kind": "cone"})
+        elif a in ("move", "remove"):
+            for o in list(self.obstacles):
+                if o["id"] == int(req.get("id", -1)):
+                    if a == "remove":
+                        self.obstacles.remove(o)
+                    else:
+                        o["x"], o["y"] = float(req["x"]), float(req["y"])
+        self.global_stamp += 1
+        self.S["costmaps"]["global"] = {"msg": grid_msg("map", self.map.ox, self.map.oy, self.map.res, self.map.W, self.map.H,
+                                                        self.cost_with_obstacles(self.global_cost, None).ravel()), "t": time.time()}
+
+    def cost_with_obstacles(self, cost, window):
+        """Lethal + inscribed + inflation marks for every cone (like the obstacle layer would mark the
+        scan hits); `window` = (wx, wy) cell-centre arrays for a local grid, None = the global grid."""
+        if not self.obstacles:
+            return cost
+        if window is None:
+            cols = self.map.ox + (np.arange(self.map.W) + 0.5) * self.map.res
+            rows = self.map.oy + (np.arange(self.map.H) + 0.5) * self.map.res
+            wx, wy = np.meshgrid(cols, rows)
+        else:
+            wx, wy = window
+        c = cost.astype(np.int16)
+        for o in self.obstacles:
+            d = np.hypot(wx - o["x"], wy - o["y"])
+            r0 = o["r"]
+            mark = np.where(d <= r0, 100, np.where(d <= r0 + 0.25, 99, np.where(d <= r0 + 0.45, (98 * np.exp(-3.0 * (d - r0 - 0.25))).astype(np.int16), 0)))
+            c = np.maximum(c, mark)
+        return c.astype(np.int8)
 
     # ------------------------------------------------------------------ geometry
     def sensor_pose(self, frame):
@@ -242,6 +306,10 @@ class Sim:
     def step(self, dt):
         while self.S["publish_q"]:
             req = self.S["publish_q"].pop(0)
+            if req["type"] == "obstacle":
+                self.apply_obstacle(req)
+                self.S["published"] = {**req, "t": time.time()}
+                continue
             if req["type"] == "halt":
                 self.halted, self.frozen_joints = True, dict(self.joints())
             elif req["type"] == "resume":
@@ -276,6 +344,10 @@ class Sim:
                 w = max(-W_MAX, min(W_MAX, 2.5 * err))
                 v = V_MAX * max(0.0, math.cos(err)) if abs(err) < 1.2 else 0.0
                 v = min(v, 0.6 * dist + 0.1)
+        if self.poly_state.get("stop"):                 # what the collision monitor does with a tripped zone
+            v = w = 0.0
+        elif self.poly_state.get("slowdown"):
+            v, w = v * 0.3, w * 0.3
         self.x += v * math.cos(self.yaw) * dt
         self.y += v * math.sin(self.yaw) * dt
         self.yaw = _wrap(self.yaw + w * dt)
@@ -289,6 +361,8 @@ class Sim:
         sx, sy, _, syaw = self.sensor_pose(frame)
         ang = np.linspace(-math.pi, math.pi, n_beams, endpoint=False).astype(np.float32)
         r = self.map.raycast(sx, sy, syaw + ang, max_range)
+        sz = self.sensor_pose(frame)[2]
+        r = np.minimum(r, self.obstacle_ranges(sx, sy, syaw + ang, lambda d: np.full_like(d, sz)))
         fin = np.isfinite(r)
         r = r + (self.rng.normal(0, 0.008, len(r)).astype(np.float32) * fin)
         r[r < min_range] = np.inf
@@ -319,6 +393,10 @@ class Sim:
                 z = np.where(ceil, CEILING - sz, r_wall * te)
             else:
                 d, z = r_wall, np.zeros_like(r_wall)
+            r_obs = self.obstacle_ranges(sx, sy, syaw + az, lambda dd, te=te: sz + dd * te)
+            obs = r_obs < d
+            d = np.where(obs, r_obs, d)
+            z = np.where(obs, r_obs * te, z)
             ok = np.isfinite(d) & (d > 0.5) & (d < 25.0)
             d, z, a = d[ok], z[ok], az[ok]
             if not len(d):
@@ -353,6 +431,7 @@ class Sim:
         inside = (col >= 0) & (col < self.map.W) & (row >= 0) & (row < self.map.H)
         data = np.full((n, n), -1, np.int8)
         data[inside] = self.global_cost[row[inside], col[inside]]
+        data = self.cost_with_obstacles(data, (wx, wy))
         return grid_msg("odom", ox, oy, res, n, n, data.ravel())
 
     # ------------------------------------------------------------------ nav2 state
@@ -379,6 +458,8 @@ class Sim:
         mark = self.opts.get("mark_polygons")
         if mark:
             mark(out["polygons"], list(self.scan_full.values()))
+            self.poly_state = {n: bool(pg.get("triggered")) for n, pg in out["polygons"].items()}
+        out["obstacles"] = [dict(o) for o in self.obstacles]
         return out
 
     def particles(self, n=300):
@@ -403,6 +484,9 @@ class Sim:
         fov = math.radians(cfg["fov"])
         cols = np.linspace(fov / 2, -fov / 2, w).astype(np.float32)        # image left = +angle
         r = self.map.raycast(cx, cy, yaw + cols, 15.0)
+        r_obs = self.obstacle_ranges(cx, cy, yaw + cols, lambda dd: np.full_like(dd, 0.25))
+        is_obs = r_obs < r
+        r = np.where(is_obs, r_obs, r)
         d = r * np.cos(cols)                                             # perpendicular distance
         horizon = h * 0.5
         img = np.empty((h, w, 3), np.uint8)
@@ -417,8 +501,12 @@ class Sim:
         bot = horizon + wall_h * ((2.6 - cfg["h"]) / 1.4) * 0.45
         mask = (rows >= top[None, :]) & (rows < bot[None, :]) & np.isfinite(d)[None, :]
         shade = np.clip(1.0 - np.nan_to_num(d, nan=15.0, posinf=15.0) / 14.0, 0.12, 1.0)
-        base = np.array([[205, 190, 165]], np.float32)
-        colc = (base * shade[:, None]).astype(np.uint8)                   # per-column wall colour
+        base = np.where(is_obs[:, None], np.array([[255, 110, 0]], np.float32), np.array([[205, 190, 165]], np.float32))
+        colc = (base * shade[:, None]).astype(np.uint8)                   # per-column wall / cone colour
+        wall_h = np.where(is_obs, np.minimum(wall_h, h * 0.7 / np.maximum(d, 0.2)), wall_h)   # a cone is shorter than a wall
+        top = horizon - wall_h * (cfg["h"] / 1.4)
+        bot = horizon + wall_h * ((2.6 - cfg["h"]) / 1.4) * 0.45
+        mask = (rows >= top[None, :]) & (rows < bot[None, :]) & np.isfinite(d)[None, :]
         img = np.where(mask[..., None], colc[None, :, :], img)
         open_ = ~np.isfinite(d)                                          # unknown / outside: bright haze
         img[:, open_, :] = np.where(rows < horizon, 150, img[:, open_, :].mean() if open_.any() else 0).astype(np.uint8)[:, :, None] if open_.any() else img[:, open_, :]
