@@ -448,8 +448,8 @@ _cm_cache: dict = {}   # name -> {"stamp": (sec, nsec), "png": bytes, "meta": di
 
 
 def costmap_png(name: str) -> "tuple[bytes, dict] | None":
-    """The latest costmap as a transparent PNG (free / unknown clear; inflation yellow->orange, inscribed
-    orange, lethal red) plus its georeference. Rendered once per new message."""
+    """The latest costmap as a transparent PNG (free / unknown clear; inflation pale -> strong pink,
+    inscribed hot pink, lethal magenta) plus its georeference. Rendered once per new message."""
     import numpy as np
     from PIL import Image
 
@@ -465,12 +465,12 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
     d = np.array(m.data, dtype=np.int16).reshape(h, w)
     rgba = np.zeros((h, w, 4), np.uint8)
     g = (d > 0) & (d < 99)
-    rgba[g, 0] = 255
-    rgba[g, 1] = (255 - d[g] * 2).clip(60, 255)
-    rgba[g, 2] = 0
+    rgba[g, 0] = 255                                        # pink ramp: pale at low cost, strong near the inscribed ring
+    rgba[g, 1] = (215 - d[g] * 1.3).clip(90, 215)
+    rgba[g, 2] = (235 - d[g] * 0.5).clip(180, 235)
     rgba[g, 3] = 255
-    rgba[d == 99] = (255, 120, 0, 255)
-    rgba[d == 100] = (200, 0, 0, 255)
+    rgba[d == 99] = (255, 60, 170, 255)                     # inscribed: hot pink
+    rgba[d == 100] = (190, 0, 120, 255)                     # lethal: magenta
     buf = io.BytesIO()
     Image.fromarray(rgba[::-1]).save(buf, "PNG")      # row 0 of the grid is the bottom
     q = m.info.origin.orientation
