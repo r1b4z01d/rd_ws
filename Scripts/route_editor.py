@@ -8,6 +8,14 @@ Map view (`?view=map`, the manager's Map tab): the same map with the robot and b
 (S1 yellow, S2E green) transformed into the map frame by this node — the first piece of the
 Foxglove-free robot console. /api/scans serves them; the page polls it a few times a second.
 
+3D view (`/3d`, `map3d.html`, the manager's 3D tab): a three.js scene replicating Foxglove's 3D panel —
+the map plane, costmap overlays (the local one placed through map->odom), the Velodyne and RPLiDAR
+clouds (binary `/api/cloud.bin`, sensor frame + the frame's pose), the URDF robot model with live
+joints (`/api/urdf`, meshes from the package share dirs under `/mesh/<pkg>/…`), every TF frame
+(`/api/tf`), nav2's plans / goal / footprint / collision polygons / AMCL particles (`/api/nav`), the
+route, a follow-robot camera, and click tools that publish /goal_pose and /initialpose
+(`POST /api/publish`). three.js + urdf-loader are vendored under static/vendor (no internet on RD).
+
 What it does: draws the nav2 map (the same zone_one.yaml AMCL uses) with a 1 m grid, loads any route
 .yaml from this directory (and the matching .raw.yaml trace, greyed), shows the robot's live map pose,
 and edits the route: click on the map to add a waypoint after the selected one, drag to move, shift-drag

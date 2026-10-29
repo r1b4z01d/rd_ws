@@ -275,3 +275,18 @@ targets. The phase is idempotent; on a box that already has the drive it only ve
 live box, stop the units that run from the trees first (`vla_cameras`, `vla_camera_ros_bridge`,
 `robot_disco_*`), as the phase refuses to move a tree that is in use. `DATA_LABEL` / `DATA_MOUNT`
 override the defaults.
+
+## Robot web pages (route editor, port 8092)
+
+`Scripts/route_editor.py` runs as the supervisor unit `robot_disco_route_editor` (autostart) and serves,
+with no internet needed on the robot:
+
+| URL | what |
+|---|---|
+| `http://192.168.11.80:8092/` | route editor: map + 1 m grid, live robot pose, click/drag waypoints, pause + post_actions per waypoint, undo, check / centre / densify, save for `path.py` |
+| `…:8092/?view=map` | 2D map view: filtered RPLiDAR scans, Velodyne top-down, global/local costmap overlays (the local one placed through map→odom) |
+| `…:8092/3d` | 3D view replicating Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / collision polygons / AMCL particles, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose` |
+
+The VLA manager embeds the last two as its Map and 3D tabs. three.js 0.182 and urdf-loader 0.12.6 are
+vendored under `Scripts/static/vendor/` (licenses there); upgrade by copying the same files from a
+`node_modules` tree.
