@@ -27,6 +27,8 @@
   #hint { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 520px; }
   #toolbar { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
   #toolbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #toolbar #t-halt { font-weight: 700; letter-spacing: .06em; margin-right: 10px; }
+  #toolbar #t-halt.halted { background: var(--ok); border-color: var(--ok); color: #fff; }
   #out { white-space: pre-wrap; font-size: 11px; color: var(--muted); }
   .row.velodyne { align-items: flex-start; flex-wrap: nowrap; gap: 6px; }
   .row.velodyne > input { margin-top: 3px; }
@@ -81,7 +83,9 @@
       <label class="cb"><input type="checkbox" id="l-plan" checked><span class="sw" style="background:#39d353"></span>plan</label>
       <label class="cb"><input type="checkbox" id="l-localplan" checked><span class="sw" style="background:#4fd6ff"></span>local plan</label>
       <label class="cb"><input type="checkbox" id="l-goal" checked><span class="sw" style="background:#ff4040"></span>goal</label>
-      <label class="cb"><input type="checkbox" id="l-poly" checked><span class="sw" style="background:#b98cff"></span>footprint / polygons</label>
+      <label class="cb"><input type="checkbox" id="l-footprint" checked><span class="sw" style="background:#b98cff"></span>footprint</label>
+      <label class="cb"><input type="checkbox" id="l-stop" checked><span class="sw" style="background:#ff4040"></span>stop polygon</label>
+      <label class="cb"><input type="checkbox" id="l-slowdown" checked><span class="sw" style="background:#ffa040"></span>slowdown polygon</label>
       <label class="cb"><input type="checkbox" id="l-particles"><span class="sw" style="background:#8ab4ff"></span>AMCL particles</label>
     </div>
     <div class="row">
@@ -100,7 +104,7 @@
   <div id="view">
     <canvas id="c"></canvas>
     <div id="status">starting…</div>
-    <div id="toolbar"><button id="t-orbit" class="on" title="left drag = orbit · right drag = pan · wheel = zoom">orbit</button><button id="t-goal" title="click the floor, drag for the heading, release = publish /goal_pose">nav goal</button><button id="t-init" title="click the floor, drag for the heading, release = publish /initialpose">initial pose</button></div>
+    <div id="toolbar"><button id="t-halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button><button id="t-orbit" class="on" title="left drag = orbit · right drag = pan · wheel = zoom">orbit</button><button id="t-goal" title="click the floor, drag for the heading, release = publish /goal_pose">nav goal</button><button id="t-init" title="click the floor, drag for the heading, release = publish /initialpose">initial pose</button></div>
     <div id="hint">left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading</div>
   </div>
 </div>
@@ -257,11 +261,13 @@ function setLine(line, pts, z) {
   line.geometry.dispose(); line.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z + (p[2] || 0))));
   line.visible = true;
 }
+const polyOn = (name) => { const e = $(`#l-${name}`); return e ? e.checked : true; };   // one checkbox per polygon
 function setLoop(name, pts, z) {
   let l = polyLines[name];
   if (!l) { l = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: POLY_COLORS[name] || 0xffffff })); l.frustumCulled = false; scene.add(l); polyLines[name] = l; }
-  if (!pts || pts.length < 3) { l.visible = false; return; }
-  l.geometry.dispose(); l.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z))); l.visible = true;
+  l.userData.has = !!(pts && pts.length >= 3);
+  if (!l.userData.has) { l.visible = false; return; }
+  l.geometry.dispose(); l.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z))); l.visible = polyOn(name);
 }
 const isMarked = (w) => !/^(wp_|x_|start$|here_)/.test(w.name) || (w.post_actions && w.post_actions.length);
 async function loadRoute(name) {
@@ -276,7 +282,15 @@ async function loadRoute(name) {
 }
 
 // ---------------------------------------------------------------- click tools (nav goal / initial pose)
-let tool = "orbit", dragStart = null;
+let tool = "orbit", dragStart = null, halted = false;
+async function haltClick() {
+  const resume = halted;
+  try {
+    const r = await fetch("/api/halt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume }) }).then((r) => r.json());
+    out(r.error ? `halt failed: ${r.error}` : (resume ? "resumed" : "HALTED: ") + (r.did || []).join(" · "));
+  } catch (e) { out(`halt failed: ${e}`); }
+}
+$("#t-halt").onclick = haltClick;
 const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 const preview = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.8, 0xffffff, 0.25, 0.15); preview.visible = false; scene.add(preview);
 function floorPoint(e) {
@@ -343,6 +357,7 @@ async function pollTf() {
   }
   if (on("#l-frames")) updateFrames();
   if (d.published && d.published.t > (pollTf.lastPub || 0)) { pollTf.lastPub = d.published.t; }
+  halted = !!d.halted; const hb = $("#t-halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted);
 }
 async function pollClouds() {
   for (const name of ["velodyne", "s1", "s2e"]) if (on(`#l-${name}`)) await fetchCloud(name);
@@ -384,7 +399,7 @@ $("#routes").onchange = () => loadRoute($("#routes").value);
 // the Velodyne settings fold stays as you left it (per browser)
 { const d = $("#velodyne-settings"); try { d.open = localStorage.getItem("map3d.velodyneSettings") === "open"; } catch (e) { /* no storage */ }
   d.addEventListener("toggle", () => { try { localStorage.setItem("map3d.velodyneSettings", d.open ? "open" : "closed"); } catch (e) { /* ignore */ } }); }
-for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-poly", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
+for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-footprint", "#l-stop", "#l-slowdown", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
 $("#ptsize").onchange = () => { for (const p of Object.values(clouds)) p.material.size = parseFloat($("#ptsize").value) || 2; };
 $("#cam-reset").onclick = () => setView(pose ? robotPos.clone() : new THREE.Vector3(MAP ? MAP.origin[0] + MAP.width * MAP.resolution / 2 : 0, MAP ? MAP.origin[1] + MAP.height * MAP.resolution / 2 : 0, 0));
 $("#cam-top").onclick = () => setView(controls.target.clone(), camera.position.distanceTo(controls.target), 0.01, 90);
@@ -397,7 +412,7 @@ function applyVisibility() {
   frameAxes.visible = on("#l-frames");
   planLine.visible = planLine.visible && on("#l-plan"); localPlanLine.visible = localPlanLine.visible && on("#l-localplan");
   goalArrow.visible = goalArrow.visible && on("#l-goal");
-  for (const l of Object.values(polyLines)) l.visible = l.visible && on("#l-poly");
+  for (const [n, l] of Object.entries(polyLines)) l.visible = !!l.userData.has && polyOn(n);
   routeLine.visible = routePts.visible = on("#l-route") && routePts.geometry.attributes.position && routePts.geometry.attributes.position.count > 0;
   for (const [n, p] of Object.entries(clouds)) p.visible = on(`#l-${n}`);
 }

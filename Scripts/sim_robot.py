@@ -191,6 +191,8 @@ class Sim:
         self.ti = 0
         self.direction = 1
         self.goal_override = None
+        self.halted = False
+        self.frozen_joints = None
         self.t0 = time.time()
         self.wheel = [0.0, 0.0]
         self.rng = np.random.default_rng(1)
@@ -239,12 +241,19 @@ class Sim:
     def step(self, dt):
         while self.S["publish_q"]:
             req = self.S["publish_q"].pop(0)
-            if req["type"] == "initialpose":
+            if req["type"] == "halt":
+                self.halted, self.frozen_joints = True, dict(self.joints())
+            elif req["type"] == "resume":
+                self.halted = False
+            elif req["type"] == "initialpose":
                 self.x, self.y, self.yaw = req["x"], req["y"], req["yaw"]
+                self.halted = False
             else:
                 self.goal_override = (req["x"], req["y"], req["yaw"], "goal")
+                self.halted = False
             self.S["published"] = {**req, "t": time.time()}
-        tgt = self.current_target()
+        self.S["halted"] = self.halted
+        tgt = None if self.halted else self.current_target()
         v = w = 0.0
         if tgt:
             dx, dy = tgt[0] - self.x, tgt[1] - self.y
@@ -417,6 +426,8 @@ class Sim:
         return buf.getvalue()
 
     def joints(self):
+        if self.halted and self.frozen_joints:
+            return self.frozen_joints
         t = time.time() - self.t0
         j = {"left_wheel_joint": round(self.wheel[0], 4), "right_wheel_joint": round(self.wheel[1], 4)}
         for i, name in enumerate(UR_JOINTS):

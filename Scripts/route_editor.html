@@ -21,6 +21,7 @@
   button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
   button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #halt { font-weight: 700; letter-spacing: .06em; margin-left: 10px; } #halt.halted { background: var(--ok); border-color: var(--ok); }
   #list { max-height: 30vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
   #list div { padding: 3px 8px; cursor: pointer; display: flex; justify-content: space-between; }
   #list div:hover { background: #2a2f3b; } #list div.sel { background: #30405f; }
@@ -42,7 +43,7 @@
 <div id="side">
   <div class="row" style="justify-content:space-between">
     <h1 id="title">Route editor</h1>
-    <span class="modes"><button id="mode-edit" class="accent edit-only" title="back to the route editor">Edit</button><button id="mode-map">Map</button><button onclick="location.href='/3d'" title="three.js scene: map, costmaps, Velodyne, URDF robot, plans">3D</button></span>
+    <span class="modes"><button id="mode-edit" class="accent edit-only" title="back to the route editor">Edit</button><button id="mode-map">Map</button><button onclick="location.href='/3d'" title="three.js scene: map, costmaps, Velodyne, URDF robot, plans">3D</button><button id="halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button></span>
   </div>
   <div class="row edit-only">
     <select id="routes" title="route file in Scripts/"></select>
@@ -328,7 +329,9 @@ async function loadRoute(name) { const d = await fetch(`/api/route?name=${encode
 async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
 let simBadge = "";
 const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;   // false inside a hidden manager tab
-async function poll() { if (!onScreen()) { setTimeout(poll, 1000); return; } try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = d.sim ? "SIM · " : ""; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+let halted = false;
+async function poll() { if (!onScreen()) { setTimeout(poll, 1000); return; } try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = d.sim ? "SIM · " : ""; halted = !!d.halted; const hb = $("#halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted); } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+$("#halt").onclick = async () => { const resume = halted; try { const r = await fetch("/api/halt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume }) }).then(r => r.json()); out(r.error ? `halt failed: ${r.error}` : (resume ? "resumed" : "HALTED: ") + (r.did || []).join(" · ")); } catch (e) { out(`halt failed: ${e}`); } };
 async function pollScans() {
   if (!onScreen()) { setTimeout(pollScans, 1000); return; }
   const want = layersOn();

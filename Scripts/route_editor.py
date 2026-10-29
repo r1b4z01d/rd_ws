@@ -60,7 +60,8 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                # 3D view: every TF frame in the map frame, joint positions, the URDF, nav2 state, raw sensor msgs
                "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
                "publish_q": [], "published": None, "want3d": {}, "sim": False,
-               "jpeg": {}, "cam_want": {}}          # name -> {data, seq, t}; name -> last time a viewer pulled it
+               "jpeg": {}, "cam_want": {},          # name -> {data, seq, t}; name -> last time a viewer pulled it
+               "halted": False}                     # the simulator's halt latch (the robot has no latch: goals are gone)
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -204,6 +205,13 @@ def ros_pose_thread() -> None:
         # transient-local so a late or latched-expecting subscriber (one asked for DURABILITY) still matches
         goal_pub = node.create_publisher(PoseStamped, "/goal_pose", cm_qos)
         init_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        # HALT: cancel every nav2 goal (an empty CancelGoal request = all goals of that server) and
+        # push zero velocity where it wins — the joystick mux input (priority 100) and the controller
+        from action_msgs.srv import CancelGoal
+        from geometry_msgs.msg import Twist
+        cancel_clients = {a: node.create_client(CancelGoal, f"/{a}/_action/cancel_goal")
+                          for a in ("follow_waypoints", "navigate_to_pose", "navigate_through_poses")}
+        halt_pubs = [node.create_publisher(Twist, "/cmd_vel_joy", 10), node.create_publisher(Twist, "/diff_cont/cmd_vel_unstamped", 10)]
 
         def _frame2d(frame):
             if frame in ("", "map"):
@@ -330,6 +338,15 @@ def ros_pose_thread() -> None:
                                           for p in ps[::step]]
                 while STATE["publish_q"]:
                     req = STATE["publish_q"].pop(0)
+                    if req["type"] == "halt":
+                        cancelled = [a for a, cl in cancel_clients.items() if cl.service_is_ready() and cl.call_async(CancelGoal.Request())]
+                        zero = Twist()
+                        for _ in range(6):                       # 0.3 s of zeros: outlasts the mux timeout
+                            for pub in halt_pubs:
+                                pub.publish(zero)
+                            time.sleep(0.05)
+                        STATE["published"] = {"type": "halt", "cancelled": cancelled, "t": time.time()}
+                        continue
                     stamp = node.get_clock().now().to_msg()
                     qz, qw = math.sin(req["yaw"] / 2), math.cos(req["yaw"] / 2)
                     if req["type"] == "goal":
@@ -558,6 +575,35 @@ def mesh_file(pkg: str, rel: str) -> "Path | None":
     return p if str(p).startswith(str(base) + os.sep) and p.is_file() else None
 
 
+def halt(resume: bool = False) -> list:
+    """Stop everything that can move. Robot: nav2 goals cancelled + zero velocity (ROS thread), the route
+    runner / vla_action / eval_hw processes get SIGTERM (eval_hw's SIGTERM is its clean EXIT: streaming
+    stops, the UR is powered down) and the vla_eval unit is stopped. Teleop is not touched (a human is
+    driving). Simulator: a latch — the robot and the arm freeze until resume."""
+    if STATE["sim"]:
+        STATE["publish_q"].append({"type": "resume" if resume else "halt"})
+        return ["simulator " + ("resumed" if resume else "halted")]
+    if resume:
+        return ["nothing to resume on the robot — start the route again"]
+    did = []
+    STATE["publish_q"].append({"type": "halt"})
+    did.append("nav2 goals cancelled, zero velocity sent")
+    for pat, label in (("Scripts/path.py", "path.py"), ("scripts/vla_action.py", "vla_action.py"),
+                       ("scripts/pick_place_loop.py", "pick_place_loop.py"), ("scripts/eval_hw.py", "eval_hw.py (clean EXIT, UR powered down)")):
+        try:
+            if subprocess.run(["pkill", "-TERM", "-f", pat], capture_output=True, timeout=5).returncode == 0:
+                did.append(f"SIGTERM {label}")
+        except Exception as e:  # noqa: BLE001
+            did.append(f"pkill {label} failed: {e}")
+    try:
+        r = subprocess.run(["sudo", "-n", "supervisorctl", "stop", "vla_eval"], capture_output=True, text=True, timeout=30)
+        if "stopped" in r.stdout:
+            did.append("supervisor: vla_eval stopped")
+    except Exception as e:  # noqa: BLE001
+        did.append(f"supervisorctl: {e}")
+    return did
+
+
 def static_file(rel: str) -> "Path | None":
     base = (HERE / "static").resolve()
     p = (base / rel).resolve()
@@ -619,7 +665,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(load_route(q["name"]))
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
-                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"]})
+                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"]})
             elif u.path == "/api/costmap":
                 r = costmap_png(q.get("name", "global"))
                 self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
@@ -659,7 +705,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "no /robot_description received yet (is the base launch running?)"}, 503)
             elif u.path == "/api/tf":
                 self._json({"frames": STATE["frames"], "joints": STATE["joints"], "t": time.time(), "ros": STATE["ros"],
-                            "published": STATE["published"], "sim": STATE["sim"]})
+                            "published": STATE["published"], "sim": STATE["sim"], "halted": STATE["halted"]})
             elif u.path == "/api/cloud.bin":
                 name = q.get("name", "velodyne")
                 b = cloud_bin(name, int(q.get("max", CLOUD_BIN_MAX)))
@@ -707,6 +753,10 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}") if n else {}
         try:
+            if u.path == "/api/halt":             # the pages' HALT button
+                did = halt(bool(body.get("resume")))
+                self._json({"ok": True, "did": did, "sim": STATE["sim"]})
+                return
             if u.path == "/api/publish":          # the 3D page's "nav goal" / "initial pose" click tools
                 kind = body.get("type")
                 if kind not in ("goal", "initialpose") or STATE["ros"] != "ok":
