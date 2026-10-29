@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start the robot face on the robot PC's own display, detached from the calling shell.
-# supervisord's robot_face unit has no DISPLAY and fails with "glfw.init() failed"; this script
-# exports the GNOME session environment and runs the node by hand instead. Installed to
+# The supervisor unit `robot_face` is the normal way to run it (its environment carries the display
+# variables since 2026-10-28); this script is the by-hand fallback: it exports the GNOME session
+# environment and runs the node detached. Installed to
 # /home/rd/start_face.sh by provision.sh (phase "services"). Log: ~/rd_ws/log/robot_face-manual.log
 set -euo pipefail
 WS="$HOME/rd_ws"
@@ -10,8 +11,17 @@ mkdir -p "$WS/log"
 
 export DISPLAY="${DISPLAY:-:0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
-export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+# glfw picks its platform from these: a Wayland session (the old Intel PC) needs WAYLAND_DISPLAY,
+# while under the Jetson's X11 GDM session the Wayland variables make glfw.init() fail, and the
+# X server wants GDM's Xauthority file (there is no ~/.Xauthority).
+if [ -S "$XDG_RUNTIME_DIR/${WAYLAND_DISPLAY:-wayland-0}" ]; then
+  export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+  export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+else
+  unset WAYLAND_DISPLAY
+  export XDG_SESSION_TYPE=x11
+  [ -r "$XDG_RUNTIME_DIR/gdm/Xauthority" ] && export XAUTHORITY="${XAUTHORITY:-$XDG_RUNTIME_DIR/gdm/Xauthority}"
+fi
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # Stop a previous instance. The bracket keeps this script's own command line from matching.
