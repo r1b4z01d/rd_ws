@@ -15,6 +15,9 @@ joints (`/api/urdf`, meshes from the package share dirs under `/mesh/<pkg>/…`)
 (`/api/tf`), nav2's plans / goal / footprint / collision polygons / AMCL particles (`/api/nav`), the
 route, a follow-robot camera, and click tools that publish /goal_pose and /initialpose
 (`POST /api/publish`). three.js + urdf-loader are vendored under static/vendor (no internet on RD).
+Camera feeds (the three VLA cameras via camera_ros_bridge's JPEG topics, the RealSense colour
+stream) are re-served as MJPEG `/cam/<name>.mjpg` on a SECOND port (--cam-port, default port+1) so the
+long-lived streams do not use up the browser's per-host connections; both pages show them as a strip.
 
 No robot at hand: `python3 route_editor.py --sim` (Scripts/sim_robot.py) drives a simulated robot along
 a route and fabricates every input above from the map alone — scans and a Velodyne cloud raycast
