@@ -127,20 +127,20 @@ function setMode(m) {
   document.querySelectorAll("input.cmlayer").forEach(c => { c.checked = m === "map" && c.dataset.cm === "global"; });
   if (m === "map") { $("#showroute").checked = false; sel = -1; }
   else { $("#showroute").checked = true; }
-  const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); history.replaceState(null, "", u);
+  const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); window.history.replaceState(null, "", u);
   renderList(); draw();
 }
 let drag = null;                               // {kind: 'pan'|'move'|'yaw', ...}
 let dirty = false;
 // undo / redo: snapshots of the waypoints (+ initial pose) taken BEFORE each change; a drag is one step
-const history = [], future = [], MAXH = 200;
+const undoStack = [], redoStack = [], MAXH = 200;
 const snapshot = () => JSON.stringify({waypoints: route.waypoints, initial_pose: route.initial_pose});
-function pushHistory() { history.push(snapshot()); if (history.length > MAXH) history.shift(); future.length = 0; histInfo(); }
+function pushHistory() { undoStack.push(snapshot()); if (undoStack.length > MAXH) undoStack.shift(); redoStack.length = 0; histInfo(); }
 function restore(snap) { const d = JSON.parse(snap); route.waypoints = d.waypoints; route.initial_pose = d.initial_pose; dirty = true; select(sel < route.waypoints.length ? sel : -1); }
-function undo() { if (!history.length) return; future.push(snapshot()); restore(history.pop()); histInfo(); }
-function redo() { if (!future.length) return; history.push(snapshot()); restore(future.pop()); histInfo(); }
-function clearHistory() { history.length = 0; future.length = 0; histInfo(); }
-function histInfo() { const e = $("#histinfo"); if (e) e.textContent = history.length ? `${history.length} step${history.length > 1 ? "s" : ""}` : ""; }
+function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); histInfo(); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); histInfo(); }
+function clearHistory() { undoStack.length = 0; redoStack.length = 0; histInfo(); }
+function histInfo() { const e = $("#histinfo"); if (e) e.textContent = undoStack.length ? `${undoStack.length} step${undoStack.length > 1 ? "s" : ""}` : ""; }
 
 const w2p = (x, y) => [(x - MAP.origin[0]) / MAP.resolution, MAP.height - (y - MAP.origin[1]) / MAP.resolution];   // world -> map px
 const p2w = (px, py) => [MAP.origin[0] + px * MAP.resolution, MAP.origin[1] + (MAP.height - py) * MAP.resolution];
@@ -276,7 +276,7 @@ window.addEventListener("mousemove", e => {
 window.addEventListener("mouseup", e => {
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   if (mode === "edit" && drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
-  if ((drag.kind === "move" || drag.kind === "yaw") && !drag.moved) { history.pop(); histInfo(); }
+  if ((drag.kind === "move" || drag.kind === "yaw") && !drag.moved) { undoStack.pop(); histInfo(); }
   drag = null;
 });
 window.addEventListener("keydown", e => {
