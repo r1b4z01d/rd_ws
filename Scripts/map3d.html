@@ -262,12 +262,19 @@ function setLine(line, pts, z) {
   line.visible = true;
 }
 const polyOn = (name) => { const e = $(`#l-${name}`); return e ? e.checked : true; };   // one checkbox per polygon
-function setLoop(name, pts, z) {
-  let l = polyLines[name];
-  if (!l) { l = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: POLY_COLORS[name] || 0xffffff })); l.frustumCulled = false; scene.add(l); polyLines[name] = l; }
-  l.userData.has = !!(pts && pts.length >= 3);
-  if (!l.userData.has) { l.visible = false; return; }
+const polyFills = {}; let polyAlert = "";
+function setLoop(name, pts, z, triggered) {
+  let l = polyLines[name], f = polyFills[name];
+  if (!l) {
+    l = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: POLY_COLORS[name] || 0xffffff })); l.frustumCulled = false; scene.add(l); polyLines[name] = l;
+    // the fill shows while something is inside the polygon (the collision monitor would be acting)
+    f = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: POLY_COLORS[name] || 0xffffff, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false })); f.frustumCulled = false; scene.add(f); polyFills[name] = f;
+  }
+  l.userData.has = !!(pts && pts.length >= 3); l.userData.triggered = !!triggered;
+  if (!l.userData.has) { l.visible = false; f.visible = false; return; }
   l.geometry.dispose(); l.geometry = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p[0], p[1], z))); l.visible = polyOn(name);
+  if (triggered) { f.geometry.dispose(); f.geometry = new THREE.ShapeGeometry(new THREE.Shape(pts.map((p) => new THREE.Vector2(p[0], p[1])))).translate(0, 0, z - 0.005); }
+  f.visible = !!triggered && polyOn(name);
 }
 const isMarked = (w) => !/^(wp_|x_|start$|here_)/.test(w.name) || (w.post_actions && w.post_actions.length);
 async function loadRoute(name) {
@@ -366,7 +373,9 @@ async function pollNav() {
   const d = await fetch(`/api/nav${on("#l-particles") ? "?particles=1" : ""}`).then((r) => r.json());
   setLine(planLine, d.plan && d.plan.pts, 0.05); setLine(localPlanLine, d.local_plan && d.local_plan.pts, 0.06);
   if (d.goal) { goalArrow.position.set(d.goal.x, d.goal.y, 0.05); goalArrow.setDirection(new THREE.Vector3(Math.cos(d.goal.yaw), Math.sin(d.goal.yaw), 0)); goalArrow.visible = on("#l-goal"); }
-  for (const [name, pg] of Object.entries(d.polygons || {})) setLoop(name, pg.pts, 0.07);
+  const alerts = [];
+  for (const [name, pg] of Object.entries(d.polygons || {})) { setLoop(name, pg.pts, 0.07, pg.triggered); if (pg.triggered) alerts.push(`${name.toUpperCase()} zone: ${pg.inside} pts`); }
+  polyAlert = alerts.join(" · ");
   if (d.particles) {
     const n = d.particles.length, pos = new Float32Array(n * 6);
     d.particles.forEach((p, i) => { pos[i * 6] = p[0]; pos[i * 6 + 1] = p[1]; pos[i * 6 + 2] = 0.04; pos[i * 6 + 3] = p[0] + 0.12 * Math.cos(p[2]); pos[i * 6 + 4] = p[1] + 0.12 * Math.sin(p[2]); pos[i * 6 + 5] = 0.04; });
@@ -412,7 +421,7 @@ function applyVisibility() {
   frameAxes.visible = on("#l-frames");
   planLine.visible = planLine.visible && on("#l-plan"); localPlanLine.visible = localPlanLine.visible && on("#l-localplan");
   goalArrow.visible = goalArrow.visible && on("#l-goal");
-  for (const [n, l] of Object.entries(polyLines)) l.visible = !!l.userData.has && polyOn(n);
+  for (const [n, l] of Object.entries(polyLines)) { l.visible = !!l.userData.has && polyOn(n); if (polyFills[n]) polyFills[n].visible = !!l.userData.has && !!l.userData.triggered && polyOn(n); }
   routeLine.visible = routePts.visible = on("#l-route") && routePts.geometry.attributes.position && routePts.geometry.attributes.position.count > 0;
   for (const [n, p] of Object.entries(clouds)) p.visible = on(`#l-${n}`);
 }
@@ -423,7 +432,7 @@ function animate() {
   controls.update(); renderer.render(scene, camera);
   stats.fN++; const now = performance.now(); if (now - stats.fT > 1000) { stats.fps = stats.fN; stats.fN = 0; stats.fT = now; }
   $("#status").textContent = `${simBadge}${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
-    Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps`;
+    Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps` + (polyAlert ? ` · ⚠ ${polyAlert}` : "");
 }
 
 (async () => {

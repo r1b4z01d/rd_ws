@@ -193,6 +193,7 @@ class Sim:
         self.goal_override = None
         self.halted = False
         self.frozen_joints = None
+        self.scan_full: dict = {}                     # name -> full-resolution map-frame scan points
         self.t0 = time.time()
         self.wheel = [0.0, 0.0]
         self.rng = np.random.default_rng(1)
@@ -372,8 +373,12 @@ class Sim:
         c, s = math.cos(self.yaw), math.sin(self.yaw)
         rot = lambda pts: [[round(self.x + px * c - py * s, 3), round(self.y + px * s + py * c, 3)] for px, py in pts]
         out["polygons"]["footprint"] = {"frame": "odom", "pts": rot(FOOTPRINT)}
-        out["polygons"]["stop"] = {"frame": "base_footprint", "pts": rot([[0.55, 0.35], [0.9, 0.35], [0.9, -0.35], [0.55, -0.35]])}
-        out["polygons"]["slowdown"] = {"frame": "base_footprint", "pts": rot([[0.55, 0.45], [1.5, 0.45], [1.5, -0.45], [0.55, -0.45]])}
+        # the robot's collision_monitor_params.yaml shapes (PolygonStop / PolygonSlow)
+        out["polygons"]["stop"] = {"frame": "base_footprint", "pts": rot([[0.3, 0.3], [0.6, 0.0], [0.3, -0.3], [-0.35, -0.2], [-0.35, 0.2]])}
+        out["polygons"]["slowdown"] = {"frame": "base_footprint", "pts": rot([[0.8, 0.4], [0.8, -0.4], [-0.8, -0.4], [-0.8, 0.4]])}
+        mark = self.opts.get("mark_polygons")
+        if mark:
+            mark(out["polygons"], list(self.scan_full.values()))
         return out
 
     def particles(self, n=300):
@@ -456,6 +461,7 @@ class Sim:
                 for name, frame, n, rmax, rmin in (("s1", "rp_s1_lidar", 720, 10.0, 0.15), ("s2e", "rp_s2e_lidar", 720, 12.0, 0.1)):
                     msg, pts = self.laser(frame, n, rmax, rmin)
                     S["latest"][name] = msg
+                    self.scan_full[name] = pts
                     step = max(1, int(math.ceil(len(pts) / self.opts.get("scan_max", 720))))
                     scans[name] = {"points": np.round(pts[::step], 3).tolist(), "frame": frame, "topic": f"sim/{name}", "t": now}
                 msg, top = self.velodyne()

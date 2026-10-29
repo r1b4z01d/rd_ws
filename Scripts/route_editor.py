@@ -84,6 +84,49 @@ CAMERA_TOPICS = {"scene": "/vla/cameras/scene/image/compressed", "side": "/vla/c
                  "wrist": "/vla/cameras/wrist/image/compressed", "realsense": "/camera/camera/color/image_raw/compressed"}
 CAMERA_LABELS = {"scene": "scene", "side": "side", "wrist": "wrist", "realsense": "RealSense"}
 JPEG_CV = threading.Condition()
+# the collision monitor's trigger rule, mirrored for the polygon highlight: a polygon trips when MORE than
+# max_points lidar points lie inside it (nav2 collision monitor, sources = the two filtered scans)
+COLLISION_CFG = HERE.parent / "src" / "robot_disco" / "config" / "collision_monitor_params.yaml"
+
+
+def polygon_max_points() -> dict:
+    """polygon name (stop / slowdown, by its pub topic) -> max_points from the collision monitor config."""
+    out = {"stop": 3, "slowdown": 3}
+    try:
+        cfg = yaml.safe_load(open(COLLISION_CFG))["collision_monitor"]["ros__parameters"]
+        for pname in cfg.get("polygons", []):
+            pc = cfg.get(pname, {})
+            topic = str(pc.get("polygon_pub_topic", "")).strip("/")
+            key = {"polygon_stop": "stop", "polygon_slowdown": "slowdown"}.get(topic)
+            if key and "max_points" in pc:
+                out[key] = int(pc["max_points"])
+    except Exception:  # noqa: BLE001 — no config here: keep the defaults
+        pass
+    return out
+
+
+POLY_MAX_POINTS = polygon_max_points()
+
+
+def inside_count(pts, poly) -> int:
+    """How many of the (n, 2) points lie inside the polygon [[x, y], ...] (even-odd ray casting)."""
+    import numpy as np
+
+    if pts is None or len(pts) == 0 or poly is None or len(poly) < 3:
+        return 0
+    pts = np.asarray(pts, float)
+    x, y = pts[:, 0], pts[:, 1]
+    P = np.asarray(poly, float)
+    inside = np.zeros(len(pts), bool)
+    for i in range(len(P)):
+        x1, y1 = P[i]
+        x2, y2 = P[(i + 1) % len(P)]
+        if y1 == y2:
+            continue
+        cross = (y1 > y) != (y2 > y)
+        xint = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+        inside ^= cross & (x < xint)
+    return int(inside.sum())
 MIME = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8",
         ".png": "image/png", ".jpg": "image/jpeg", ".stl": "application/octet-stream", ".dae": "model/vnd.collada+xml",
         ".json": "application/json", ".md": "text/plain", ".txt": "text/plain"}
@@ -269,6 +312,21 @@ def ros_pose_thread() -> None:
 
         last_scan_pub = 0.0
         frames_listed_t, frame_names = 0.0, []
+        scan_full: dict = {}                                   # name -> (n, 2) map-frame points, full resolution
+
+        def _scan_full(m):
+            try:
+                tf = buf.lookup_transform("map", m.header.frame_id, rclpy.time.Time())
+            except Exception:  # noqa: BLE001
+                return None
+            t, q = tf.transform.translation, tf.transform.rotation
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+            r = np.asarray(m.ranges, dtype=float)
+            ang = m.angle_min + np.arange(len(r)) * m.angle_increment
+            ok = np.isfinite(r) & (r > max(0.05, m.range_min)) & (r < min(30.0, m.range_max or 30.0))
+            r, ang = r[ok], ang[ok]
+            px, py = r * np.cos(ang), r * np.sin(ang)
+            return np.stack([t.x + px * math.cos(yaw) - py * math.sin(yaw), t.y + px * math.sin(yaw) + py * math.cos(yaw)], 1)
         STATE["ros"] = "waiting for TF map->base_footprint"
         while True:
             rclpy.spin_once(node, timeout_sec=0.2)
@@ -288,6 +346,9 @@ def ros_pose_thread() -> None:
                         else:
                             pts = _scan_to_map(m)
                             topic = SCAN_TOPICS[name]
+                            full = _scan_full(m)
+                            if full is not None:
+                                scan_full[name] = full
                     except Exception as e:  # noqa: BLE001 — one bad message must not kill the node
                         STATE["ros"] = f"{name}: {type(e).__name__}: {str(e)[:80]}"
                         continue
@@ -329,6 +390,7 @@ def ros_pose_thread() -> None:
                     c_, s_ = math.cos(yaw_), math.sin(yaw_)
                     polys_out[pname] = {"frame": pm.header.frame_id,
                                         "pts": [[round(tx_ + p.x * c_ - p.y * s_, 3), round(ty_ + p.x * s_ + p.y * c_, 3)] for p in pm.polygon.points]}
+                mark_polygons(polys_out, [v for v in scan_full.values()])
                 STATE["nav"]["polygons"] = polys_out
                 pc_ = latest.get("particles")
                 if pc_ is not None and now_t - STATE["want3d"].get("particles", 0) < 3.0:
@@ -575,6 +637,16 @@ def mesh_file(pkg: str, rel: str) -> "Path | None":
     return p if str(p).startswith(str(base) + os.sep) and p.is_file() else None
 
 
+def mark_polygons(polys: dict, point_sets: list) -> None:
+    """Add inside / max_points / triggered to the stop and slowdown polygons (the footprint is left alone),
+    counting the lidar points of every source like the collision monitor does."""
+    for name, pg in polys.items():
+        if name not in POLY_MAX_POINTS:
+            continue
+        n = sum(inside_count(pts, pg["pts"]) for pts in point_sets)
+        pg["inside"], pg["max_points"], pg["triggered"] = n, POLY_MAX_POINTS[name], n > POLY_MAX_POINTS[name]
+
+
 def halt(resume: bool = False) -> list:
     """Stop everything that can move. Robot: nav2 goals cancelled + zero velocity (ROS thread), the route
     runner / vla_action / eval_hw processes get SIGTERM (eval_hw's SIGTERM is its clean EXIT: streaming
@@ -810,7 +882,7 @@ def main() -> int:
         names = route_files()
         rname = ARGS.sim_route or next((n for n in ('tigger_test', 'tigger') if n in names), names[0] if names else None)
         wps = load_route(rname)['waypoints'] if rname else []
-        sim_robot.start(STATE, ARGS.map, {'route': rname, 'waypoints': wps, 'scan_max': SCAN_MAX_POINTS, 'cloud_max': CLOUD_MAX_POINTS, 'cloud_z': CLOUD_Z, 'put_jpeg': put_jpeg, 'cam_want': STATE['cam_want']})
+        sim_robot.start(STATE, ARGS.map, {'route': rname, 'waypoints': wps, 'scan_max': SCAN_MAX_POINTS, 'cloud_max': CLOUD_MAX_POINTS, 'cloud_z': CLOUD_Z, 'put_jpeg': put_jpeg, 'cam_want': STATE['cam_want'], 'mark_polygons': mark_polygons})
         print(f'[route_editor] SIMULATION: no robot — driving route {rname!r} ({len(wps)} waypoints)', flush=True)
     elif not ARGS.no_ros:
         threading.Thread(target=ros_pose_thread, daemon=True).start()
