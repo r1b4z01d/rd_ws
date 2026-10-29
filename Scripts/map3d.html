@@ -88,6 +88,8 @@
       <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" style="background:#fabe17"></span>route</label>
       <select id="routes"></select>
     </div>
+    <h3>Cameras</h3>
+    <div class="row" id="cam-panel"></div>
     <h3>View point</h3>
     <div class="row">
       <button id="cam-reset">reset</button><button id="cam-top">top-down</button><button id="cam-robot">look at robot</button>
@@ -102,6 +104,7 @@
     <div id="hint">left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading</div>
   </div>
 </div>
+<script src="/static/cams.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -402,6 +405,7 @@ function animate() {
   loadRoutes().catch(() => {});
   loop(pollTf, 100); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
   applyVisibility(); animate();
+  if (window.initCams) initCams({ view: $("#view"), panel: $("#cam-panel"), top: 44 });   // below the tool buttons
 })();
 </script>
 </body>

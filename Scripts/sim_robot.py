@@ -41,6 +41,12 @@ UR_HOME = [0.0, -1.9, 1.7, -1.4, -1.571, 0.0]
 UR_JOINTS = ["ur_shoulder_pan_joint", "ur_shoulder_lift_joint", "ur_elbow_joint", "ur_wrist_1_joint", "ur_wrist_2_joint", "ur_wrist_3_joint"]
 CEILING = 2.6
 V_MAX, W_MAX = 0.5, 1.0
+# simulated camera feeds: first-person raycast renders (name -> mount offset x/y on the base, yaw, fov,
+# height above the floor); the wrist camera rides on the arm, so it sways a little
+SIM_CAMS = {"scene": {"xy": (0.22, 0.0), "yaw": 0.0, "fov": 90.0, "h": 0.95},
+            "side": {"xy": (0.0, -0.22), "yaw": -math.pi / 2, "fov": 90.0, "h": 0.9},
+            "wrist": {"xy": (0.45, 0.12), "yaw": 0.0, "fov": 60.0, "h": 0.6},
+            "realsense": {"xy": (0.24, 0.0), "yaw": 0.0, "fov": 69.0, "h": 0.34}}
 
 
 def _ns(**kw):
@@ -367,6 +373,49 @@ class Sim:
         ya = self.yaw + self.rng.normal(0, 0.06, n)
         return [[round(float(a), 3), round(float(b), 3), round(float(_wrap(c)), 3)] for a, b, c in zip(xs, ys, ya)]
 
+    def camera_frame(self, name, w=320, h=240) -> bytes:
+        """A first-person view: walls from the map raycast (height ~ 1/distance, shaded), floor and
+        ceiling gradients, no return where the map is unknown — labelled, JPEG-encoded."""
+        import io
+
+        from PIL import Image, ImageDraw
+
+        cfg = SIM_CAMS[name]
+        c, s_ = math.cos(self.yaw), math.sin(self.yaw)
+        ox, oy = cfg["xy"]
+        cx, cy = self.x + ox * c - oy * s_, self.y + ox * s_ + oy * c
+        sway = 0.08 * math.sin(time.time() * 0.7) if name == "wrist" else 0.0
+        yaw = self.yaw + cfg["yaw"] + sway
+        fov = math.radians(cfg["fov"])
+        cols = np.linspace(fov / 2, -fov / 2, w).astype(np.float32)        # image left = +angle
+        r = self.map.raycast(cx, cy, yaw + cols, 15.0)
+        d = r * np.cos(cols)                                             # perpendicular distance
+        horizon = h * 0.5
+        img = np.empty((h, w, 3), np.uint8)
+        rows = np.arange(h)[:, None].astype(np.float32)
+        ceil = np.clip(60 - rows * 0.25, 20, 60)
+        floor = np.clip(40 + (rows - horizon) * 0.9, 40, 170)
+        img[..., 0] = np.where(rows < horizon, ceil, floor * 0.75)
+        img[..., 1] = np.where(rows < horizon, ceil + 5, floor * 0.7)
+        img[..., 2] = np.where(rows < horizon, ceil + 15, floor * 0.6)
+        wall_h = np.where(np.isfinite(d), np.clip(h * 1.4 / np.maximum(d, 0.2), 0, h), 0.0)
+        top = horizon - wall_h * (cfg["h"] / 1.4)                        # a lower camera sees more wall above
+        bot = horizon + wall_h * ((2.6 - cfg["h"]) / 1.4) * 0.45
+        mask = (rows >= top[None, :]) & (rows < bot[None, :]) & np.isfinite(d)[None, :]
+        shade = np.clip(1.0 - np.nan_to_num(d, nan=15.0, posinf=15.0) / 14.0, 0.12, 1.0)
+        base = np.array([[205, 190, 165]], np.float32)
+        colc = (base * shade[:, None]).astype(np.uint8)                   # per-column wall colour
+        img = np.where(mask[..., None], colc[None, :, :], img)
+        open_ = ~np.isfinite(d)                                          # unknown / outside: bright haze
+        img[:, open_, :] = np.where(rows < horizon, 150, img[:, open_, :].mean() if open_.any() else 0).astype(np.uint8)[:, :, None] if open_.any() else img[:, open_, :]
+        im = Image.fromarray(img)
+        dr = ImageDraw.Draw(im)
+        dr.rectangle([0, 0, w, 14], fill=(0, 0, 0))
+        dr.text((4, 1), f"SIM {name}  ({self.x:.1f}, {self.y:.1f}) {math.degrees(self.yaw):.0f}°  {time.strftime('%H:%M:%S')}", fill=(230, 230, 230))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=70)
+        return buf.getvalue()
+
     def joints(self):
         t = time.time() - self.t0
         j = {"left_wheel_joint": round(self.wheel[0], 4), "right_wheel_joint": round(self.wheel[1], 4)}
@@ -378,7 +427,8 @@ class Sim:
     def run(self):
         S = self.S
         S["ros"] = "ok"
-        last_sense = last_slow = 0.0
+        last_sense = last_slow = last_cam = 0.0
+        put_jpeg, cam_want = self.opts.get("put_jpeg"), self.opts.get("cam_want", {})
         t_prev = time.time()
         while True:
             now = time.time()
@@ -402,6 +452,12 @@ class Sim:
                 step = max(1, int(math.ceil(len(top) / self.opts.get("cloud_max", 3000))))
                 scans["velodyne"] = {"points": np.round(top[::step], 3).tolist(), "frame": "velodyne_frame", "topic": "sim/velodyne", "t": now}
                 S["scans"] = scans
+            if put_jpeg is not None:
+                watched = any(now - t < 3.0 for t in cam_want.values())
+                if now - last_cam >= (0.125 if watched else 1.0):      # 8 fps while someone looks, else a heartbeat
+                    last_cam = now
+                    for name in SIM_CAMS:
+                        put_jpeg(name, self.camera_frame(name))
             if now - last_slow >= 0.5:
                 last_slow = now
                 S["costmaps"]["local"] = {"msg": self.local_costmap(), "t": now}

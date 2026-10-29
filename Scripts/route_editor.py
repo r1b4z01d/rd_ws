@@ -56,7 +56,8 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                "frame_tf": {},   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
                # 3D view: every TF frame in the map frame, joint positions, the URDF, nav2 state, raw sensor msgs
                "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
-               "publish_q": [], "published": None, "want3d": {}, "sim": False}
+               "publish_q": [], "published": None, "want3d": {}, "sim": False,
+               "jpeg": {}, "cam_want": {}}          # name -> {data, seq, t}; name -> last time a viewer pulled it
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -73,9 +74,23 @@ SCAN_MAX_POINTS = 720
 NAV_TOPICS = {"plan": "/plan", "local_plan": "/local_plan"}
 POLY_TOPICS = {"footprint": "/local_costmap/published_footprint", "stop": "/polygon_stop", "slowdown": "/polygon_slowdown"}
 CLOUD_BIN_MAX = 20000          # points per /api/cloud.bin answer (the Velodyne has ~29k per revolution)
+# camera feeds: the three VLA cameras (the camera service's UDP stream, republished as JPEG by
+# scripts/camera_ros_bridge.py) and the RealSense colour stream; served as MJPEG at /cam/<name>.mjpg
+CAMERA_TOPICS = {"scene": "/vla/cameras/scene/image/compressed", "side": "/vla/cameras/side/image/compressed",
+                 "wrist": "/vla/cameras/wrist/image/compressed", "realsense": "/camera/camera/color/image_raw/compressed"}
+CAMERA_LABELS = {"scene": "scene", "side": "side", "wrist": "wrist", "realsense": "RealSense"}
+JPEG_CV = threading.Condition()
 MIME = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8",
         ".png": "image/png", ".jpg": "image/jpeg", ".stl": "application/octet-stream", ".dae": "model/vnd.collada+xml",
         ".json": "application/json", ".md": "text/plain", ".txt": "text/plain"}
+
+
+def put_jpeg(name: str, data: bytes) -> None:
+    """Newest JPEG of a camera; wakes every MJPEG client waiting on it."""
+    with JPEG_CV:
+        e = STATE["jpeg"].get(name)
+        STATE["jpeg"][name] = {"data": data, "seq": (e["seq"] + 1) if e else 1, "t": time.time()}
+        JPEG_CV.notify_all()
 
 
 # --------------------------------------------------------------------------- map
@@ -176,6 +191,12 @@ def ros_pose_thread() -> None:
             node.create_subscription(ParticleCloud, "/particle_cloud", _keep("particles"), qos_profile_sensor_data)
         except Exception:  # noqa: BLE001 — nav2_msgs not installed: no particles layer
             pass
+        from sensor_msgs.msg import CompressedImage
+
+        def _jpeg(name):
+            return lambda m: put_jpeg(name, bytes(m.data))
+        for name, topic in CAMERA_TOPICS.items():
+            node.create_subscription(CompressedImage, topic, _jpeg(name), qos_profile_sensor_data)
         # click-to-publish from the 3D page (queued by the HTTP thread, sent from here)
         # transient-local so a late or latched-expecting subscriber (one asked for DURABILITY) still matches
         goal_pub = node.create_publisher(PoseStamped, "/goal_pose", cm_qos)
@@ -555,6 +576,30 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200) -> None:
         self._send(code, json.dumps(obj).encode())
 
+    def _mjpeg(self, name: str, fps: float) -> None:
+        """multipart/x-mixed-replace of the newest frames; a slow viewer skips frames, never queues them."""
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        last, gap = -1, 1.0 / max(1.0, min(30.0, fps))
+        try:
+            while True:
+                with JPEG_CV:
+                    e = STATE["jpeg"].get(name)
+                    if e is None or e["seq"] == last:
+                        JPEG_CV.wait(1.0)
+                        e = STATE["jpeg"].get(name)
+                STATE["cam_want"][name] = time.time()
+                if e is None or e["seq"] == last:
+                    continue
+                last = e["seq"]
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(e["data"]) + e["data"] + b"\r\n")
+                self.wfile.flush()
+                time.sleep(gap)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
     def do_GET(self) -> None:  # noqa: N802
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -619,6 +664,25 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, b, "application/octet-stream")
                 else:
                     self._json({"error": f"no {name} data yet"}, 404)
+            elif u.path == "/api/cameras":
+                now = time.time()
+                self._json({"cameras": [{"name": n, "label": CAMERA_LABELS[n], "topic": t, "url": f"/cam/{n}.mjpg",
+                                         "snapshot": f"/cam/{n}.jpg",
+                                         "alive": n in STATE["jpeg"] and now - STATE["jpeg"][n]["t"] < 3.0}
+                                        for n, t in CAMERA_TOPICS.items()]})
+            elif u.path.startswith("/cam/") and u.path.endswith(".mjpg"):
+                name = u.path[len("/cam/"):-len(".mjpg")]
+                if name in CAMERA_TOPICS:
+                    self._mjpeg(name, float(q.get("fps", 10)))
+                else:
+                    self._send(404, b"no such camera", "text/plain")
+            elif u.path.startswith("/cam/") and u.path.endswith(".jpg"):
+                e = STATE["jpeg"].get(u.path[len("/cam/"):-len(".jpg")])
+                if e:
+                    STATE["cam_want"][u.path[len("/cam/"):-len(".jpg")]] = time.time()
+                    self._send(200, e["data"], "image/jpeg")
+                else:
+                    self._send(404, b"no frame yet", "text/plain")
             elif u.path == "/api/nav":
                 nav = dict(STATE["nav"])
                 if q.get("particles"):
@@ -687,7 +751,7 @@ def main() -> int:
         names = route_files()
         rname = ARGS.sim_route or next((n for n in ('tigger_test', 'tigger') if n in names), names[0] if names else None)
         wps = load_route(rname)['waypoints'] if rname else []
-        sim_robot.start(STATE, ARGS.map, {'route': rname, 'waypoints': wps, 'scan_max': SCAN_MAX_POINTS, 'cloud_max': CLOUD_MAX_POINTS, 'cloud_z': CLOUD_Z})
+        sim_robot.start(STATE, ARGS.map, {'route': rname, 'waypoints': wps, 'scan_max': SCAN_MAX_POINTS, 'cloud_max': CLOUD_MAX_POINTS, 'cloud_z': CLOUD_Z, 'put_jpeg': put_jpeg, 'cam_want': STATE['cam_want']})
         print(f'[route_editor] SIMULATION: no robot — driving route {rname!r} ({len(wps)} waypoints)', flush=True)
     elif not ARGS.no_ros:
         threading.Thread(target=ros_pose_thread, daemon=True).start()

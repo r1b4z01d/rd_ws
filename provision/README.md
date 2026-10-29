@@ -285,6 +285,7 @@ with no internet needed on the robot:
 |---|---|
 | `http://192.168.11.80:8092/` | route editor: map + 1 m grid, live robot pose, click/drag waypoints, pause + post_actions per waypoint, undo, check / centre / densify, save for `path.py` |
 | `…:8092/?view=map` | 2D map view: filtered RPLiDAR scans, Velodyne top-down, global/local costmap overlays (the local one placed through map→odom) |
+| `…:8092/cam/<scene|side|wrist|realsense>.mjpg` | camera feeds as MJPEG (the three VLA cameras via `scripts/camera_ros_bridge.py`'s `/vla/cameras/<name>/image/compressed`, the RealSense via `/camera/camera/color/image_raw/compressed`); `.jpg` = one frame; both pages show them as a strip on the right (checkbox per feed, click to enlarge) |
 | `…:8092/3d` | 3D view replicating Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / collision polygons / AMCL particles, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose` |
 
 **Developing without the robot:** `cd rd_ws/Scripts && python3 route_editor.py --sim` serves the same
