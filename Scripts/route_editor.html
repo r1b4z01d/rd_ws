@@ -66,8 +66,8 @@
     <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
   </div>
   <div class="row" id="costmaps">
-    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"> global costmap</label>
-    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"> local costmap</label>
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"><span class="sw" style="background:#ff3caa"></span>global costmap</label>
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"><span class="sw" style="background:#8c32ff"></span>local costmap</label>
     <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="25" style="width:60px">%</label>
   </div>
   <div class="muted" id="scaninfo" style="font-size:11px"></div>
@@ -107,7 +107,7 @@
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
-  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; costmap: <span class="sw" style="background:#ffc8e6"></span>inflated <span class="sw" style="background:#ff3caa"></span>inscribed <span class="sw" style="background:#be0078"></span>lethal</div>
+  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; global costmap: <span class="sw" style="background:#ffc8e6"></span>inflated <span class="sw" style="background:#ff3caa"></span>inscribed <span class="sw" style="background:#be0078"></span>lethal &nbsp; local costmap: <span class="sw" style="background:#cdafff"></span>inflated <span class="sw" style="background:#8c32ff"></span>inscribed <span class="sw" style="background:#5500a0"></span>lethal</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script src="/static/cams.js"></script>
