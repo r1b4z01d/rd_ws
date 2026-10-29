@@ -27,7 +27,8 @@ case "${1:-status}" in
     echo "starting the local stack"
     ( cd "$HERE" && start_one "route editor (sim)" "route_editor.py --sim" editor.log python3 route_editor.py --sim --port "$EDITOR_PORT" ${ROUTE:+--sim-route "$ROUTE"} )
     ( cd "$VLA" && start_one "teleop panel (mujoco)" "ur5e_lerobot.teleop.manual_panel" panel.log .venv/bin/python -m ur5e_lerobot.teleop.manual_panel --engine mujoco --input sliders --ui web --web-port "$PANEL_PORT" )
-    ( cd "$VLA" && start_one "manager" "webui.server" manager.log .venv/bin/python -m webui.server --port "$MANAGER_PORT" --route-url "http://127.0.0.1:$EDITOR_PORT/" --robot-url "http://127.0.0.1:$PANEL_PORT/" )
+    # the manager keeps the robot as "live" and starts on "sim" — the header switch flips between them
+    ( cd "$VLA" && start_one "manager" "webui.server" manager.log .venv/bin/python -m webui.server --port "$MANAGER_PORT" --source sim --sim-route-url "http://127.0.0.1:$EDITOR_PORT/" --sim-robot-url "http://127.0.0.1:$PANEL_PORT/" )
     sleep 4
     echo "open http://127.0.0.1:$MANAGER_PORT/   (Robot / Routes / Map / 3D tabs; the panel alone: :$PANEL_PORT, the 3D view alone: :$EDITOR_PORT/3d)"
     ;;
