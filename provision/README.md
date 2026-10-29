@@ -287,6 +287,13 @@ with no internet needed on the robot:
 | `…:8092/?view=map` | 2D map view: filtered RPLiDAR scans, Velodyne top-down, global/local costmap overlays (the local one placed through map→odom) |
 | `…:8092/3d` | 3D view replicating Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / collision polygons / AMCL particles, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose` |
 
+**Developing without the robot:** `cd rd_ws/Scripts && python3 route_editor.py --sim` serves the same
+pages on a laptop with a simulated robot driving the route (`--sim-route NAME`): scans and a Velodyne
+cloud raycast against the map, costmaps, TF, joints, plans, goal/initial-pose tools, the URDF
+(`sim/robot_sim.urdf` primitives, or the real model after `sim/fetch_assets.sh` with the robot on).
+Needs only numpy, Pillow and PyYAML. The manager follows with
+`python -m webui.server --port 8081 --route-url http://127.0.0.1:8092/`.
+
 The VLA manager embeds the last two as its Map and 3D tabs. three.js 0.182 and urdf-loader 0.12.6 are
 vendored under `Scripts/static/vendor/` (licenses there); upgrade by copying the same files from a
 `node_modules` tree.

@@ -16,6 +16,11 @@ joints (`/api/urdf`, meshes from the package share dirs under `/mesh/<pkg>/…`)
 route, a follow-robot camera, and click tools that publish /goal_pose and /initialpose
 (`POST /api/publish`). three.js + urdf-loader are vendored under static/vendor (no internet on RD).
 
+No robot at hand: `python3 route_editor.py --sim` (Scripts/sim_robot.py) drives a simulated robot along
+a route and fabricates every input above from the map alone — scans and a Velodyne cloud raycast
+against the walls, costmaps, TF, joints, plans, the URDF (sim/robot_sim.urdf, or the real one after
+sim/fetch_assets.sh) — so both pages, and the manager's Map/3D tabs, work on any laptop.
+
 What it does: draws the nav2 map (the same zone_one.yaml AMCL uses) with a 1 m grid, loads any route
 .yaml from this directory (and the matching .raw.yaml trace, greyed), shows the robot's live map pose,
 and edits the route: click on the map to add a waypoint after the selected one, drag to move, shift-drag
@@ -51,7 +56,7 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                "frame_tf": {},   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
                # 3D view: every TF frame in the map frame, joint positions, the URDF, nav2 state, raw sensor msgs
                "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
-               "publish_q": [], "published": None, "want3d": {}}
+               "publish_q": [], "published": None, "want3d": {}, "sim": False}
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -474,7 +479,11 @@ def cloud_bin(name: str, max_points: int) -> "bytes | None":
     m = STATE["latest"].get(name)
     if m is None:
         return None
-    if name in CLOUD_TOPICS:
+    if hasattr(m, "sim_points"):                 # route_editor.py --sim: already [x, y, z, i] float32
+        arr = m.sim_points
+        step = max(1, int(math.ceil(len(arr) / max(1, max_points))))
+        out = np.ascontiguousarray(arr[::step], dtype=np.float32)
+    elif name in CLOUD_TOPICS:
         from sensor_msgs_py import point_cloud2 as pc2
 
         names = [f.name for f in m.fields]
@@ -500,6 +509,9 @@ def cloud_bin(name: str, max_points: int) -> "bytes | None":
 
 
 _share_cache: dict = {}
+# where the mesh packages live when there is no ament index (the Mac running --sim): the robot_disco
+# sources, and the UR meshes sim/fetch_assets.sh copies from the robot
+SIM_PKG_DIRS = {"robot_disco": HERE.parent / "src" / "robot_disco", "ur_description": HERE / "sim" / "meshes" / "ur_description"}
 
 
 def mesh_file(pkg: str, rel: str) -> "Path | None":
@@ -511,6 +523,8 @@ def mesh_file(pkg: str, rel: str) -> "Path | None":
             _share_cache[pkg] = Path(get_package_share_directory(pkg)).resolve()
         except Exception:  # noqa: BLE001
             _share_cache[pkg] = None
+        if _share_cache[pkg] is None and pkg in SIM_PKG_DIRS and SIM_PKG_DIRS[pkg].is_dir():
+            _share_cache[pkg] = SIM_PKG_DIRS[pkg].resolve()
     base = _share_cache[pkg]
     if base is None:
         return None
@@ -557,7 +571,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(load_route(q["name"]))
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
-                self._json({"pose": fresh, "ros": STATE["ros"]})
+                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"]})
             elif u.path == "/api/costmap":
                 r = costmap_png(q.get("name", "global"))
                 self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
@@ -597,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "no /robot_description received yet (is the base launch running?)"}, 503)
             elif u.path == "/api/tf":
                 self._json({"frames": STATE["frames"], "joints": STATE["joints"], "t": time.time(), "ros": STATE["ros"],
-                            "published": STATE["published"]})
+                            "published": STATE["published"], "sim": STATE["sim"]})
             elif u.path == "/api/cloud.bin":
                 name = q.get("name", "velodyne")
                 b = cloud_bin(name, int(q.get("max", CLOUD_BIN_MAX)))
@@ -653,6 +667,9 @@ def main() -> int:
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--map", type=Path, default=HERE.parent / "src" / "robot_disco" / "maps" / "zone_one.yaml")
     ap.add_argument("--no-ros", action="store_true", help="do not try to read the robot's pose")
+    ap.add_argument("--sim", action="store_true", help="no robot: simulate pose, TF, scans, Velodyne, costmaps, plans, joints "
+                    "and the URDF from the map alone (Scripts/sim_robot.py) — develop the pages anywhere")
+    ap.add_argument("--sim-route", default=None, metavar="NAME", help="route the simulated robot drives (default: tigger_test, tigger, or the first one)")
     ap.add_argument("--raw-scans", action="store_true", help="draw the lidar drivers' raw scans instead of the filtered ones")
     ap.add_argument("--scan-topics", default=None, metavar="name=topic,...",
                     help="override the scan topics drawn on the map (default: the filtered RPLiDAR scans)")
@@ -664,7 +681,15 @@ def main() -> int:
         SCAN_TOPICS.clear()
         SCAN_TOPICS.update(RAW_SCAN_TOPICS)
     load_map(ARGS.map)
-    if not ARGS.no_ros:
+    if ARGS.sim:
+        import sim_robot
+
+        names = route_files()
+        rname = ARGS.sim_route or next((n for n in ('tigger_test', 'tigger') if n in names), names[0] if names else None)
+        wps = load_route(rname)['waypoints'] if rname else []
+        sim_robot.start(STATE, ARGS.map, {'route': rname, 'waypoints': wps, 'scan_max': SCAN_MAX_POINTS, 'cloud_max': CLOUD_MAX_POINTS, 'cloud_z': CLOUD_Z})
+        print(f'[route_editor] SIMULATION: no robot — driving route {rname!r} ({len(wps)} waypoints)', flush=True)
+    elif not ARGS.no_ros:
         threading.Thread(target=ros_pose_thread, daemon=True).start()
     else:
         STATE["ros"] = "disabled (--no-ros)"

@@ -138,7 +138,7 @@ function setView(target, distance = 16, phiDeg = 28, thetaDeg = 122) {
 
 // ---------------------------------------------------------------- state
 let MAP = null, pose = null, robotPos = new THREE.Vector3(), frames = {}, joints = {}, viewInit = false;
-let robotModel = null, urdfState = "loading";
+let robotModel = null, urdfState = "loading", simBadge = "";
 const stats = { cloud: {}, tfHz: 0, tfN: 0, tfT: performance.now(), fps: 0, fN: 0, fT: performance.now() };
 
 // ---------------------------------------------------------------- map plane (+ costmaps)
@@ -300,7 +300,7 @@ async function loop(fn, ms) { try { await fn(); } catch (e) { console.warn(fn.na
 
 async function pollTf() {
   const d = await fetch("/api/tf").then((r) => r.json());
-  frames = d.frames || {}; joints = d.joints || {};
+  frames = d.frames || {}; joints = d.joints || {}; simBadge = d.sim ? "SIM · " : "";
   stats.tfN++; const now = performance.now(); if (now - stats.tfT > 2000) { stats.tfHz = stats.tfN / ((now - stats.tfT) / 1000); stats.tfN = 0; stats.tfT = now; }
   const bf = frames.base_footprint || frames.base_link;
   if (bf) {
@@ -379,7 +379,7 @@ function animate() {
   requestAnimationFrame(animate);
   controls.update(); renderer.render(scene, camera);
   stats.fN++; const now = performance.now(); if (now - stats.fT > 1000) { stats.fps = stats.fN; stats.fN = 0; stats.fT = now; }
-  $("#status").textContent = `${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
+  $("#status").textContent = `${simBadge}${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
     Object.entries(stats.cloud).filter(([n]) => on(`#l-${n}`)).map(([n, v]) => `${n}: ${v}`).join(" · ") + ` · ${urdfState} · tf ${stats.tfHz.toFixed(0)} Hz · ${stats.fps} fps`;
 }
 

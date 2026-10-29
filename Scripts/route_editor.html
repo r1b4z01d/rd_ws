@@ -210,7 +210,7 @@ function draw() {
     ctx.strokeStyle = "#2ea043"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a, b, R, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + R * 1.6 * Math.cos(pose.yaw), b - R * 1.6 * Math.sin(pose.yaw)); ctx.stroke();
   }
-  $("#status").textContent = `${route.name || "(new)"}${dirty ? " *" : ""} · ${W.length} waypoints · map ${MAP.name} ${MAP.resolution} m/px · robot: ${pose ? `(${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : rosStatus}`;
+  $("#status").textContent = `${simBadge}${route.name || "(new)"}${dirty ? " *" : ""} · ${W.length} waypoints · map ${MAP.name} ${MAP.resolution} m/px · robot: ${pose ? `(${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : rosStatus}`;
 }
 
 function hit(cx, cy) {
@@ -323,7 +323,8 @@ function out(t) { $("#out").textContent = t; }
 function setRoute(d, keepHistory) { route = d; route.raw_trace = d.raw_trace || []; sel = -1; dirty = false; $("#savename").value = d.name; if (!keepHistory) clearHistory(); select(-1); }
 async function loadRoute(name) { const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then(r => r.json()); if (d.error) { out(d.error); return; } setRoute(d); out(`loaded ${name}.yaml: ${d.waypoints.length} waypoints`); }
 async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
-async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+let simBadge = "";
+async function poll() { try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = d.sim ? "SIM · " : ""; } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
 async function pollScans() {
   const want = layersOn();
   if (want.length) {
