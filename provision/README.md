@@ -289,10 +289,12 @@ with no internet needed on the robot:
 | `POST …:8092/api/halt` | the pages' **HALT** button: cancels every nav2 goal, sends zero velocity (joystick mux input + wheel controller), SIGTERMs path.py / vla_action / eval_hw (the eval's clean EXIT powers the UR down) and stops the `vla_eval` unit; teleop is left alone. In `--sim` it latches until RESUME |
 | `…:8092/3d` | 3D view replicating Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / collision polygons / AMCL particles, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose` |
 
-**Developing without the robot:** `Scripts/dev_stack.sh start` brings up the whole GUI on a laptop — the
-editor in `--sim`, the teleop panel with the MuJoCo arm and on-screen sliders (:8090), and the VLA manager
-(:8081) with every tab wired to those two; `stop` / `status` / `logs` likewise. By hand:
-`cd rd_ws/Scripts && python3 route_editor.py --sim` serves the same
+**Developing without the robot:** the manager's Map tab has a live / sim switch; choosing sim starts
+`route_editor.py --sim` on the manager's own host (port 8094, cameras on 8095) and live stops it again.
+`Scripts/dev_stack.sh start` brings up the whole GUI on a laptop in one go — the editor in `--sim`
+(:8094), the teleop panel with the MuJoCo arm and on-screen sliders (:8090), and the VLA manager (:8081)
+wired to both; `stop` / `status` / `logs` likewise. By hand:
+`cd rd_ws/Scripts && python3 route_editor.py --sim --port 8094` serves the same
 pages on a laptop with a simulated robot driving the route (`--sim-route NAME`): scans and a Velodyne
 cloud raycast against the map, costmaps, TF, joints, plans, goal/initial-pose tools, the URDF
 (`sim/robot_sim.urdf` primitives, or the real model after `sim/fetch_assets.sh` with the robot on).

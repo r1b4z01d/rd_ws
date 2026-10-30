@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # The whole robot GUI on a laptop, no robot needed:
-#   route editor + 2D map + 3D view with a simulated robot   (route_editor.py --sim, :8092 / cams :8093)
+#   route editor + 2D map + 3D view with a simulated robot   (route_editor.py --sim, :8094 / cams :8095)
 #   teleop panel with the MuJoCo arm and on-screen sliders    (manual_panel --engine mujoco, :8090)
 #   VLA manager with every tab pointed at the two above       (webui.server, :8081)
 #
 #   Scripts/dev_stack.sh start|stop|status|logs
 #
+# The manager's Map tab also starts the simulator by itself when its switch goes to sim (same port).
 # Needs: python3 with numpy/Pillow/PyYAML for the editor; VLA/.venv with mujoco, lerobot, fastapi,
 # uvicorn, python-multipart for the panel and the manager. Logs go to /tmp/dev_stack/.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VLA="${VLA_DIR:-$HERE/../../VLA}"
 LOG=/tmp/dev_stack; mkdir -p "$LOG"
-EDITOR_PORT="${EDITOR_PORT:-8092}"; PANEL_PORT="${PANEL_PORT:-8090}"; MANAGER_PORT="${MANAGER_PORT:-8081}"
+EDITOR_PORT="${EDITOR_PORT:-8094}"; PANEL_PORT="${PANEL_PORT:-8090}"; MANAGER_PORT="${MANAGER_PORT:-8081}"   # 8094: the sim never shares the live editor's 8092
 ROUTE="${SIM_ROUTE:-}"
 
 running() { pgrep -f "$1" >/dev/null 2>&1; }
