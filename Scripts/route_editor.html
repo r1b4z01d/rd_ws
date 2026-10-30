@@ -404,7 +404,7 @@ $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => 
   const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
   setMode(mode);
   poll(); pollScans(); pollCostmaps();
-  if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 8 });
+  if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 44 });   // below the map tools
 })();
 window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 </script>
