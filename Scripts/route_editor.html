@@ -29,6 +29,8 @@
   .muted { color: var(--muted); font-size: 12px; }
   pre#out { background: #0f1115; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 11px; max-height: 22vh; overflow: auto; margin: 0; white-space: pre-wrap; }
   #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none; }
+  #maptools { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
+  #maptools button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   #help { position: absolute; right: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 420px; }
   label.cb { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
   .modes button { padding: 4px 10px; } .modes button + button { margin-left: 4px; }
@@ -107,6 +109,7 @@
 <div id="main">
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
+  <div id="maptools" class="map-only"><button id="mt-pan" class="on" title="drag = pan · wheel = zoom">pan</button><button id="mt-goal" title="click the map, drag for the heading, release = publish /goal_pose (the robot drives there)">nav goal</button><button id="mt-init" title="click the map, drag for the heading, release = publish /initialpose">initial pose</button></div>
   <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; global costmap: <span class="sw" style="background:#ffc8e6"></span>inflated <span class="sw" style="background:#ff3caa"></span>inscribed <span class="sw" style="background:#be0078"></span>lethal &nbsp; local costmap: <span class="sw" style="background:#cdafff"></span>inflated <span class="sw" style="background:#8c32ff"></span>inscribed <span class="sw" style="background:#5500a0"></span>lethal</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
@@ -116,6 +119,14 @@ const $ = s => document.querySelector(s);
 const canvas = $("#c"), ctx = canvas.getContext("2d");
 let MAP = null, img = new Image(), route = {name: "", waypoints: [], initial_pose: null, raw_trace: []};
 let sel = -1, pose = null, rosStatus = "", obstacles = [];          // obstacles: the simulator's cones
+let mapTool = "pan", poseDrag = null, toolMsg = "", toolMsgT = 0;     // map mode: nav goal / initial pose tools
+function setMapTool(t) {
+  mapTool = t; poseDrag = null;
+  for (const id of ["pan", "goal", "init"]) $(`#mt-${id}`).classList.toggle("on", id === t);
+  canvas.style.cursor = t === "pan" ? "" : "crosshair"; draw();
+}
+$("#mt-pan").onclick = () => setMapTool("pan"); $("#mt-goal").onclick = () => setMapTool("goal"); $("#mt-init").onclick = () => setMapTool("init");
+function toolSay(t) { toolMsg = t; toolMsgT = Date.now(); draw(); }
 let view = {scale: 1, tx: 0, ty: 0};          // canvas px = map px * scale + t
 let mode = new URLSearchParams(location.search).get("view") === "map" ? "map" : "edit";
 let scans = {};                                 // name -> {points: [[x,y],...], t}
@@ -214,13 +225,20 @@ function draw() {
     if (i === sel) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
     ctx.fillStyle = "#fff"; ctx.font = "11px sans-serif"; ctx.fillText(w.name, a + 9, b - 9);
   });
+  // nav goal / initial pose being placed
+  if (poseDrag) {
+    const [a, b] = w2c(poseDrag.x, poseDrag.y); const L = Math.max(24, 0.8 / MAP.resolution * view.scale);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a, b, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + L * Math.cos(poseDrag.yaw), b - L * Math.sin(poseDrag.yaw)); ctx.stroke();
+  }
   // robot
   if (pose) {
     const [a, b] = w2c(pose.x, pose.y); const R = Math.max(6, 0.3 / MAP.resolution * view.scale);
     ctx.strokeStyle = "#2ea043"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a, b, R, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + R * 1.6 * Math.cos(pose.yaw), b - R * 1.6 * Math.sin(pose.yaw)); ctx.stroke();
   }
-  $("#status").textContent = `${simBadge}${route.name || "(new)"}${dirty ? " *" : ""} · ${W.length} waypoints · map ${MAP.name} ${MAP.resolution} m/px · robot: ${pose ? `(${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : rosStatus}`;
+  const tm = Date.now() - toolMsgT < 6000 ? ` · ${toolMsg}` : "";
+  $("#status").textContent = `${simBadge}${route.name || "(new)"}${dirty ? " *" : ""} · ${W.length} waypoints · map ${MAP.name} ${MAP.resolution} m/px · robot: ${pose ? `(${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : rosStatus}${tm}`;
 }
 
 function hit(cx, cy) {
@@ -278,16 +296,25 @@ canvas.addEventListener("wheel", e => {
 }, {passive: false});
 canvas.addEventListener("mousedown", e => {
   const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top; const i = mode === "edit" ? hit(cx, cy) : -1;
+  if (mode === "map" && mapTool !== "pan" && e.button === 0) { const [x, y] = c2w(cx, cy); poseDrag = {x, y, yaw: 0}; draw(); return; }
   if (i >= 0) { select(i); pushHistory(); drag = {kind: e.shiftKey ? "yaw" : "move", i, moved: false}; }
   else drag = {kind: "pan", x0: cx, y0: cy, tx: view.tx, ty: view.ty, moved: false};
 });
 window.addEventListener("mousemove", e => {
+  if (poseDrag) { const r = canvas.getBoundingClientRect(); const [x, y] = c2w(e.clientX - r.left, e.clientY - r.top); if (Math.hypot(x - poseDrag.x, y - poseDrag.y) > 0.05) poseDrag.yaw = Math.atan2(y - poseDrag.y, x - poseDrag.x); draw(); return; }
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   if (drag.kind === "pan") { if (Math.hypot(cx - drag.x0, cy - drag.y0) > 3) drag.moved = true; view.tx = drag.tx + cx - drag.x0; view.ty = drag.ty + cy - drag.y0; draw(); }
   else if (drag.kind === "move") { const [x, y] = c2w(cx, cy); drag.moved = true; setWaypoint(drag.i, {x, y}, true); select(drag.i); }
   else if (drag.kind === "yaw") { const w = route.waypoints[drag.i]; const [a, b] = w2c(w.x, w.y); drag.moved = true; setWaypoint(drag.i, {yaw: Math.atan2(-(cy - b), cx - a)}, true); select(drag.i); }
 });
-window.addEventListener("mouseup", e => {
+window.addEventListener("mouseup", async e => {
+  if (poseDrag) {
+    const body = {type: mapTool === "goal" ? "goal" : "initialpose", x: +poseDrag.x.toFixed(3), y: +poseDrag.y.toFixed(3), yaw: +poseDrag.yaw.toFixed(4)};
+    const deg = (poseDrag.yaw * 180 / Math.PI).toFixed(0); setMapTool("pan");
+    try { const rr = await fetch("/api/publish", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
+      toolSay(rr.error ? `publish failed: ${rr.error}` : `published ${body.type}: (${body.x}, ${body.y}) ${deg}°`); } catch (err) { toolSay(`publish failed: ${err}`); }
+    return;
+  }
   if (!drag) return; const r = canvas.getBoundingClientRect(); const cx = e.clientX - r.left, cy = e.clientY - r.top;
   if (mode === "edit" && drag.kind === "pan" && !drag.moved && $("#clickadd").checked && e.target === canvas) { const [x, y] = c2w(cx, cy); addAt(x, y, sel >= 0 ? sel : null); }
   if ((drag.kind === "move" || drag.kind === "yaw") && !drag.moved) { undoStack.pop(); histInfo(); }
@@ -296,7 +323,7 @@ window.addEventListener("mouseup", e => {
 window.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.key === "Delete" || e.key === "Backspace") $("#del").click();
-  if (e.key === "Escape") select(-1);
+  if (e.key === "Escape") { select(-1); if (mode === "map") setMapTool("pan"); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
 });

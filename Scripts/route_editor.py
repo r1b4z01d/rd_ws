@@ -61,7 +61,8 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
                "publish_q": [], "published": None, "want3d": {}, "sim": False,
                "jpeg": {}, "cam_want": {},          # name -> {data, seq, t}; name -> last time a viewer pulled it
-               "halted": False}                     # the simulator's halt latch (the robot has no latch: goals are gone)
+               "halted": False,                     # the simulator's halt latch (the robot has no latch: goals are gone)
+               "ros_up": False}                     # the ROS node (or the simulator) is running — publishing is possible
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -171,6 +172,7 @@ def ros_pose_thread() -> None:
 
         rclpy.init()
         node = Node("route_editor")
+        STATE["ros_up"] = True
         buf = Buffer()
         TransformListener(buf, node)
         latest: dict = {}
@@ -745,7 +747,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(load_route(q["name"]))
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
-                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"]})
+                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"], "ros_up": STATE["ros_up"]})
             elif u.path == "/api/costmap":
                 r = costmap_png(q.get("name", "global"))
                 self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
@@ -852,8 +854,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if u.path == "/api/publish":          # the 3D page's "nav goal" / "initial pose" click tools
                 kind = body.get("type")
-                if kind not in ("goal", "initialpose") or STATE["ros"] != "ok":
-                    self._json({"error": "type must be goal|initialpose and ROS must be up"}, 400)
+                if kind not in ("goal", "initialpose"):
+                    self._json({"error": "type must be goal|initialpose"}, 400)
+                    return
+                if not STATE["ros_up"]:               # NOT "localized": the initial pose is for exactly that case
+                    self._json({"error": "the ROS node is not up (started with --no-ros, or rclpy is missing)"}, 503)
                     return
                 req = {"type": kind, "x": float(body["x"]), "y": float(body["y"]), "yaw": float(body.get("yaw", 0.0))}
                 STATE["publish_q"].append(req)

@@ -686,6 +686,7 @@ class Sim:
     def run(self):
         S = self.S
         S["ros"] = "ok"
+        S["ros_up"] = True
         last_sense = last_slow = last_cam = 0.0
         put_jpeg, cam_want = self.opts.get("put_jpeg"), self.opts.get("cam_want", {})
         t_prev = time.time()
