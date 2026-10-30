@@ -14,6 +14,10 @@
   h1 { font-size: 15px; margin: 0; letter-spacing: .03em; }
   h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 6px 0 2px; }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  /* labels in Title Case, rows justified across the side panel */
+  .row { justify-content: space-between; width: 100%; }
+  label.cb, #toolbar button, #maptools button, .modes button, details.settings summary, #cam-panel label, #sim-panel button { text-transform: capitalize; }
+  .unit { text-transform: none; }
   select, input, textarea, button { background: #272b35; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
   input[type=number] { width: 86px; }
   textarea { width: 100%; min-height: 90px; font: 12px/1.35 ui-monospace, Menlo, monospace; }

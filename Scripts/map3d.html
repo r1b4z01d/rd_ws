@@ -13,6 +13,10 @@
   #side h2 { margin: 0; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
   #side h3 { margin: 6px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   .row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+  /* labels in Title Case, rows justified across the side panel */
+  .row { justify-content: space-between; width: 100%; }
+  label.cb, #toolbar button, #maptools button, .modes button, details.settings summary, #cam-panel label, #sim-panel button { text-transform: capitalize; }
+  .unit { text-transform: none; }
   label.cb { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; }
   /* layer toggles: no checkbox — the label itself is the switch, underlined green when active */
   label.cb:has(input[type=checkbox]) { position: relative; padding: 1px 0 3px; border-bottom: 2px solid transparent; color: var(--muted); user-select: none; cursor: pointer; }
@@ -41,7 +45,7 @@
   details.settings summary { cursor: pointer; user-select: none; list-style: none; display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 6px; }
   details.settings summary:hover { background: #2a2e38; }
   details.settings summary::-webkit-details-marker { display: none; }
-  details.settings .caret::before { content: "▸ settings"; color: var(--muted); font-size: 12px; } details.settings[open] .caret::before { content: "▾ settings"; }
+  details.settings .caret::before { content: "▸ Settings"; color: var(--muted); font-size: 12px; } details.settings[open] .caret::before { content: "▾ Settings"; }
   details.settings .row { margin: 6px 0 0 4px; }
 </style>
 <script type="importmap">
@@ -60,7 +64,7 @@
       <label class="cb"><input type="checkbox" id="l-grid" checked> grid</label>
       <label class="cb"><input type="checkbox" id="l-global" checked><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
       <label class="cb"><input type="checkbox" id="l-local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
-      <label class="cb">opacity <input type="number" id="cmalpha" value="40" min="5" max="100" step="5"> %</label>
+      <label class="cb">opacity <input type="number" id="cmalpha" value="40" min="5" max="100" step="5"> <span class="unit">%</span></label>
     </div>
     <h3>Sensors</h3>
     <div class="row velodyne">
@@ -68,10 +72,10 @@
       <details id="velodyne-settings" class="settings"><summary title="Velodyne settings"><span class="caret"></span></summary>
         <div class="row"><select id="cloudcolor"><option value="height">colour: height</option><option value="intensity">colour: intensity</option><option value="flat">colour: flat</option></select></div>
         <div class="row">
-          <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> px</label>
-          <label class="cb">rate <input type="number" id="cloudhz" value="4" min="1" max="10" step="1"> Hz</label>
+          <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> <span class="unit">px</span></label>
+          <label class="cb">rate <input type="number" id="cloudhz" value="4" min="1" max="10" step="1"> <span class="unit">Hz</span></label>
         </div>
-        <div class="row"><label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> pts</label></div>
+        <div class="row"><label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> <span class="unit">pts</span></label></div>
       </details>
     </div>
     <div class="row">
