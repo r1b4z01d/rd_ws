@@ -52,14 +52,14 @@
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-map" checked> map</label>
       <label class="cb"><input type="checkbox" id="l-grid" checked> grid</label>
-      <label class="cb"><input type="checkbox" id="l-global" checked><span class="sw" style="background:#ff3caa"></span>global costmap</label>
-      <label class="cb"><input type="checkbox" id="l-local"><span class="sw" style="background:#8c32ff"></span>local costmap</label>
+      <label class="cb"><input type="checkbox" id="l-global" checked><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
+      <label class="cb"><input type="checkbox" id="l-local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
       <label class="cb">opacity <input type="number" id="cmalpha" value="40" min="5" max="100" step="5"> %</label>
     </div>
     <h3>Sensors</h3>
     <div class="row velodyne">
       <input type="checkbox" id="l-velodyne" checked title="show the Velodyne cloud">
-      <details id="velodyne-settings" class="settings"><summary title="click to show / hide the Velodyne settings"><span class="sw" style="background:linear-gradient(90deg,#3030ff,#30ff30,#ff3030)"></span><span class="caret"></span>Velodyne</summary>
+      <details id="velodyne-settings" class="settings"><summary title="click to show / hide the Velodyne settings"><span class="sw" data-key="velodyne" style="background:linear-gradient(90deg,#3030ff,#30ff30,#ff3030)"></span><span class="caret"></span>Velodyne</summary>
         <div class="row"><select id="cloudcolor"><option value="height">colour: height</option><option value="intensity">colour: intensity</option><option value="flat">colour: flat</option></select></div>
         <div class="row">
           <label class="cb">size <input type="number" id="ptsize" value="2" min="1" max="8" step="0.5"> px</label>
@@ -69,8 +69,8 @@
       </details>
     </div>
     <div class="row">
-      <label class="cb"><input type="checkbox" id="l-s1"><span class="sw" style="background:#f5d033"></span>S1</label>
-      <label class="cb"><input type="checkbox" id="l-s2e" checked><span class="sw" style="background:#39d353"></span>S2E</label>
+      <label class="cb"><input type="checkbox" id="l-s1"><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
+      <label class="cb"><input type="checkbox" id="l-s2e" checked><span class="sw" data-key="s2e" style="background:#39d353"></span>S2E</label>
     </div>
     <h3>Robot</h3>
     <div class="row">
@@ -80,16 +80,16 @@
     </div>
     <h3>Navigation</h3>
     <div class="row">
-      <label class="cb"><input type="checkbox" id="l-plan" checked><span class="sw" style="background:#39d353"></span>plan</label>
-      <label class="cb"><input type="checkbox" id="l-localplan" checked><span class="sw" style="background:#4fd6ff"></span>local plan</label>
-      <label class="cb"><input type="checkbox" id="l-goal" checked><span class="sw" style="background:#ff4040"></span>goal</label>
-      <label class="cb"><input type="checkbox" id="l-footprint" checked><span class="sw" style="background:#b98cff"></span>footprint</label>
-      <label class="cb"><input type="checkbox" id="l-stop" checked><span class="sw" style="background:#ff4040"></span>stop polygon</label>
-      <label class="cb"><input type="checkbox" id="l-slowdown" checked><span class="sw" style="background:#ffa040"></span>slowdown polygon</label>
-      <label class="cb"><input type="checkbox" id="l-particles"><span class="sw" style="background:#8ab4ff"></span>AMCL particles</label>
+      <label class="cb"><input type="checkbox" id="l-plan" checked><span class="sw" data-key="plan" style="background:#39d353"></span>plan</label>
+      <label class="cb"><input type="checkbox" id="l-localplan" checked><span class="sw" data-key="localplan" style="background:#4fd6ff"></span>local plan</label>
+      <label class="cb"><input type="checkbox" id="l-goal" checked><span class="sw" data-key="goal" style="background:#ff4040"></span>goal</label>
+      <label class="cb"><input type="checkbox" id="l-footprint" checked><span class="sw" data-key="footprint" style="background:#b98cff"></span>footprint</label>
+      <label class="cb"><input type="checkbox" id="l-stop" checked><span class="sw" data-key="stop" style="background:#ff4040"></span>stop polygon</label>
+      <label class="cb"><input type="checkbox" id="l-slowdown" checked><span class="sw" data-key="slowdown" style="background:#ffa040"></span>slowdown polygon</label>
+      <label class="cb"><input type="checkbox" id="l-particles"><span class="sw" data-key="particles" style="background:#8ab4ff"></span>AMCL particles</label>
     </div>
     <div class="row">
-      <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" style="background:#fabe17"></span>route</label>
+      <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" data-key="route" style="background:#fabe17"></span>route</label>
       <select id="routes"></select>
     </div>
     <h3>Cameras</h3>
@@ -114,6 +114,7 @@
   </div>
 </div>
 <script src="/static/cams.js"></script>
+<script src="/static/swatches.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -182,6 +183,7 @@ function setTexture(mesh, url, cb) {
 }
 let mapMesh = null;
 const costmaps = {};                                      // name -> {mesh, stamp}
+const CM_COLORS = { global: "", local: "" };              // "" = the server's default palette
 
 // ---------------------------------------------------------------- point clouds
 const LUT = Array.from({ length: 256 }, (_, i) => new THREE.Color().setHSL((1 - i / 255) * 0.667, 1, 0.5));
@@ -460,7 +462,7 @@ async function pollNav() {
 async function pollCostmaps() {
   for (const name of ["global", "local"]) {
     if (!on(`#l-${name}`)) { if (costmaps[name]) costmaps[name].mesh.visible = false; continue; }
-    const meta = await fetch(`/api/costmap?name=${name}`).then((r) => r.json());
+    const meta = await fetch(`/api/costmap?name=${name}${CM_COLORS[name] ? "&color=" + CM_COLORS[name].replace("#", "") : ""}`).then((r) => r.json());
     if (meta.error) continue;
     let cm = costmaps[name];
     if (!cm) { cm = { mesh: groundPlane(meta, name === "global" ? 0.01 : 0.02, 0.4), stamp: null }; scene.add(cm.mesh); costmaps[name] = cm; }
@@ -501,6 +503,19 @@ function applyVisibility() {
   for (const [n, p] of Object.entries(clouds)) p.visible = on(`#l-${n}`);
 }
 
+// ---------------------------------------------------------------- layer colours (hold a swatch)
+function applyColor(k, hex) {
+  const c = new THREE.Color(hex);
+  if (k === "velodyne" || k === "s1" || k === "s2e") { CLOUD_FLAT[k] = c; if (k === "velodyne" && $("#cloudcolor").value !== "flat") $("#cloudcolor").value = "flat"; }
+  else if (k === "plan") planLine.material.color.copy(c);
+  else if (k === "localplan") localPlanLine.material.color.copy(c);
+  else if (k === "goal") goalArrow.setColor(c);
+  else if (k === "footprint" || k === "stop" || k === "slowdown") { POLY_COLORS[k] = c.getHex(); if (polyLines[k]) polyLines[k].material.color.copy(c); if (polyFills[k]) polyFills[k].material.color.copy(c); }
+  else if (k === "particles") particles.material.color.copy(c);
+  else if (k === "route") routeLine.material.color.copy(c);
+  else if (k === "cm_global" || k === "cm_local") { const n = k.slice(3); CM_COLORS[n] = hex; if (costmaps[n]) costmaps[n].stamp = null; }
+}
+
 // ---------------------------------------------------------------- render loop + status
 function animate() {
   requestAnimationFrame(animate);
@@ -518,6 +533,7 @@ function animate() {
   loop(pollTf, 100); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
   applyVisibility(); animate();
   if (window.initCams) initCams({ view: $("#view"), panel: $("#cam-panel"), top: 44 });   // below the tool buttons
+  if (window.initSwatches) initSwatches({ page: "3d", apply: applyColor });
 })();
 </script>
 </body>

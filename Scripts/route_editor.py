@@ -449,10 +449,23 @@ def ros_pose_thread() -> None:
 _cm_cache: dict = {}   # name -> {"stamp": (sec, nsec), "png": bytes, "meta": dict}
 
 
-def costmap_png(name: str) -> "tuple[bytes, dict] | None":
-    """The latest costmap as a transparent PNG (free / unknown clear; the global one in pinks, the local
-    one in purples: pale inflation -> strong inscribed -> dark lethal) plus its georeference.
-    Rendered once per new message."""
+COSTMAP_COLORS = {"global": "ff3caa", "local": "8c32ff"}     # base hues: pink / purple (the pages' swatches can override)
+
+
+def _hex_rgb(h: str) -> "tuple[int, int, int] | None":
+    h = (h or "").strip().lstrip("#")
+    if len(h) != 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+
+def costmap_png(name: str, color: "str | None" = None) -> "tuple[bytes, dict] | None":
+    """The latest costmap as a transparent PNG (free / unknown clear) plus its georeference, in a
+    palette built from ONE base colour: pale tint at low inflation -> the base at the inscribed ring ->
+    a darker shade for lethal. Rendered once per new message and colour."""
     import numpy as np
     from PIL import Image
 
@@ -460,7 +473,9 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
     if not entry:
         return None
     m = entry["msg"]
-    st = (m.header.stamp.sec, m.header.stamp.nanosec, m.info.width, m.info.height)
+    rgb = _hex_rgb(color) or _hex_rgb(COSTMAP_COLORS.get(name, "ff3caa"))
+    chex = "%02x%02x%02x" % rgb
+    st = (m.header.stamp.sec, m.header.stamp.nanosec, m.info.width, m.info.height, chex)
     c = _cm_cache.get(name)
     if c and c["stamp"] == st:
         return c["png"], _georef(c["meta"], entry["t"])
@@ -468,19 +483,12 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
     d = np.array(m.data, dtype=np.int16).reshape(h, w)
     rgba = np.zeros((h, w, 4), np.uint8)
     g = (d > 0) & (d < 99)
-    if name == "local":                                     # purple ramp: pale lavender -> violet
-        rgba[g, 0] = (205 - d[g] * 0.6).clip(150, 205)
-        rgba[g, 1] = (175 - d[g] * 1.0).clip(80, 175)
-        rgba[g, 2] = 255
-        rgba[d == 99] = (140, 50, 255, 255)                 # inscribed: violet
-        rgba[d == 100] = (85, 0, 160, 255)                  # lethal: deep purple
-    else:                                                   # pink ramp: pale at low cost, strong near the inscribed ring
-        rgba[g, 0] = 255
-        rgba[g, 1] = (215 - d[g] * 1.3).clip(90, 215)
-        rgba[g, 2] = (235 - d[g] * 0.5).clip(180, 235)
-        rgba[d == 99] = (255, 60, 170, 255)                 # inscribed: hot pink
-        rgba[d == 100] = (190, 0, 120, 255)                 # lethal: magenta
+    t = (d[g] / 98.0)[:, None]                              # 0 at the inflation edge -> 1 at the inscribed ring
+    pale = 0.25 * np.array(rgb, float) + 0.75 * 255.0       # a light tint of the base colour
+    rgba[g, :3] = (pale[None, :] * (1 - t) + np.array(rgb, float)[None, :] * t).clip(0, 255).astype(np.uint8)
     rgba[g, 3] = 255
+    rgba[d == 99] = (*rgb, 255)                             # inscribed: the base colour
+    rgba[d == 100] = (*(int(v * 0.6) for v in rgb), 255)    # lethal: a darker shade
     buf = io.BytesIO()
     Image.fromarray(rgba[::-1]).save(buf, "PNG")      # row 0 of the grid is the bottom
     q = m.info.origin.orientation
@@ -489,7 +497,7 @@ def costmap_png(name: str) -> "tuple[bytes, dict] | None":
             "origin_frame": [float(m.info.origin.position.x), float(m.info.origin.position.y)],
             "origin_yaw": math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
             "width": w, "height": h, "stamp": f"{st[0]}.{st[1]:09d}",
-            "image": f"/costmap/{name}.png?v={st[0]}.{st[1]}"}
+            "image": f"/costmap/{name}.png?v={st[0]}.{st[1]}&color={chex}", "color": chex}
     _cm_cache[name] = {"stamp": st, "png": buf.getvalue(), "meta": base}
     return _cm_cache[name]["png"], _georef(base, entry["t"])
 
@@ -749,10 +757,10 @@ class Handler(BaseHTTPRequestHandler):
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
                 self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"], "ros_up": STATE["ros_up"]})
             elif u.path == "/api/costmap":
-                r = costmap_png(q.get("name", "global"))
+                r = costmap_png(q.get("name", "global"), q.get("color"))
                 self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
             elif u.path.startswith("/costmap/") and u.path.endswith(".png"):
-                r = costmap_png(u.path[len("/costmap/"):-4])
+                r = costmap_png(u.path[len("/costmap/"):-4], q.get("color"))
                 if r:
                     self._send(200, r[0], "image/png")
                 else:

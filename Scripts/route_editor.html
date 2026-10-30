@@ -62,14 +62,14 @@
     <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
   </div>
   <div class="row" id="layers">
-    <label class="cb"><input type="checkbox" class="layer" data-layer="s1"><span class="sw" style="background:#f5d033"></span>S1</label>
-    <label class="cb"><input type="checkbox" class="layer" data-layer="s2e"><span class="sw" style="background:#39d353"></span>S2E</label>
-    <label class="cb"><input type="checkbox" class="layer" data-layer="velodyne"><span class="sw" style="background:#e85cff"></span>Velodyne</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="s1"><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="s2e"><span class="sw" data-key="s2e" style="background:#39d353"></span>S2E</label>
+    <label class="cb"><input type="checkbox" class="layer" data-layer="velodyne"><span class="sw" data-key="velodyne" style="background:#e85cff"></span>Velodyne</label>
     <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
   </div>
   <div class="row" id="costmaps">
-    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"><span class="sw" style="background:#ff3caa"></span>global costmap</label>
-    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"><span class="sw" style="background:#8c32ff"></span>local costmap</label>
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
+    <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
     <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="25" style="width:60px">%</label>
   </div>
   <div class="muted" id="scaninfo" style="font-size:11px"></div>
@@ -114,6 +114,7 @@
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script src="/static/cams.js"></script>
+<script src="/static/swatches.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const canvas = $("#c"), ctx = canvas.getContext("2d");
@@ -133,6 +134,7 @@ let scans = {};                                 // name -> {points: [[x,y],...],
 let costmaps = {};                              // name -> {meta, img}
 const cmOn = () => [...document.querySelectorAll("input.cmlayer")].filter(c => c.checked).map(c => c.dataset.cm);
 const SCAN_COLORS = {s1: "#f5d033", s2e: "#39d353", velodyne: "#e85cff"};
+const CM_COLORS = {global: "", local: ""};                                   // "" = the server's default palette
 const layersOn = () => [...document.querySelectorAll("input.layer")].filter(c => c.checked).map(c => c.dataset.layer);
 function setMode(m) {
   mode = m; document.body.classList.toggle("map-mode", m === "map");
@@ -382,7 +384,7 @@ async function pollCostmaps() {
   if (!onScreen()) { setTimeout(pollCostmaps, 1000); return; }
   for (const name of cmOn()) {
     try {
-      const meta = await fetch(`/api/costmap?name=${name}`).then(r => r.json());
+      const meta = await fetch(`/api/costmap?name=${name}${CM_COLORS[name] ? "&color=" + CM_COLORS[name].replace("#", "") : ""}`).then(r => r.json());
       if (meta.error) { costmaps[name] = {meta: null, err: meta.error}; continue; }
       const cur = costmaps[name];
       if (!cur || !cur.meta || cur.meta.stamp !== meta.stamp) {
@@ -405,6 +407,11 @@ $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => 
   setMode(mode);
   poll(); pollScans(); pollCostmaps();
   if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 44 });   // below the map tools
+  if (window.initSwatches) initSwatches({ page: "map", apply: (k, hex) => {
+    if (k in SCAN_COLORS) SCAN_COLORS[k] = hex;
+    else if (k === "cm_global" || k === "cm_local") { const n = k.slice(3); CM_COLORS[n] = hex; if (costmaps[n]) costmaps[n].stamp = null; }
+    draw();
+  } });
 })();
 window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 </script>
