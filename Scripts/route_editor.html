@@ -32,7 +32,13 @@
   #maptools { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
   #maptools button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   #help { position: absolute; right: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 420px; }
-  label.cb { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+  label.cb { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+  /* layer toggles: no checkbox — the label itself is the switch, underlined green when active */
+  label.cb:has(input[type=checkbox]) { position: relative; padding: 1px 0 3px; border-bottom: 2px solid transparent; color: var(--muted); user-select: none; cursor: pointer; }
+  label.cb:has(input[type=checkbox]) input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; margin: 0; pointer-events: none; }
+  label.cb:has(input[type=checkbox]:checked) { color: var(--fg); border-bottom-color: var(--ok); }
+  label.cb:has(input[type=checkbox]):hover { color: var(--fg); }
+  label.cb:has(input[type=checkbox]:focus-visible) { outline: 1px dashed var(--muted); outline-offset: 2px; }
   .modes button { padding: 4px 10px; } .modes button + button { margin-left: 4px; }
   body.map-mode .edit-only { display: none !important; }
   body:not(.map-mode) .map-only { display: none !important; }
