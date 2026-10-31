@@ -380,6 +380,10 @@ def ros_pose_thread() -> None:
                 for f in frame_names:
                     try:
                         tf = buf.lookup_transform("map", f, rclpy.time.Time())
+                        # "latest" can be minutes old once odom / AMCL stop: a stale frame is no frame
+                        # (the 3D page drew the robot and its scans where it WAS, 2026-10-31)
+                        if now_t - (tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9) > 5.0:
+                            continue
                         t, q = tf.transform.translation, tf.transform.rotation
                         fr[f] = [round(t.x, 4), round(t.y, 4), round(t.z, 4), round(q.x, 5), round(q.y, 5), round(q.z, 5), round(q.w, 5)]
                     except Exception:  # noqa: BLE001 — frame not connected to map (yet)

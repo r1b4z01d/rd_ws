@@ -171,6 +171,7 @@ function setView(target, distance = 16, phiDeg = 28, thetaDeg = 122) {
 // ---------------------------------------------------------------- state
 let MAP = null, pose = null, robotPos = new THREE.Vector3(), frames = {}, joints = {}, viewInit = false;
 let robotModel = null, urdfState = "loading", simBadge = "";
+const robotTarget = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), yaw: 0, has: false, t: 0 };   // eased in animate()
 const stats = { cloud: {}, tfHz: 0, tfN: 0, tfT: performance.now(), fps: 0, fN: 0, fT: performance.now() };
 
 // ---------------------------------------------------------------- map plane (+ costmaps)
@@ -439,18 +440,17 @@ async function pollTf() {
   stats.tfN++; const now = performance.now(); if (now - stats.tfT > 2000) { stats.tfHz = stats.tfN / ((now - stats.tfT) / 1000); stats.tfN = 0; stats.tfT = now; }
   const bf = frames.base_footprint || frames.base_link;
   if (bf) {
-    const prev = robotPos.clone(); robotPos.set(bf[0], bf[1], bf[2]);
     const yaw = Math.atan2(2 * (bf[6] * bf[5] + bf[3] * bf[4]), 1 - 2 * (bf[4] * bf[4] + bf[5] * bf[5]));
     pose = { x: bf[0], y: bf[1], yaw };
-    robotRing.position.set(bf[0], bf[1], 0.04); robotHeading.position.set(bf[0], bf[1], 0.05); robotHeading.setDirection(new THREE.Vector3(Math.cos(yaw), Math.sin(yaw), 0));
-    if (!viewInit) { setView(robotPos.clone()); viewInit = true; }
-    else if (on("#follow")) { const d_ = robotPos.clone().sub(prev); controls.target.add(d_); camera.position.add(d_); }
-  } else { pose = null; }
-  if (robotModel) {
-    const root = frames[robotModel.urdfName] || frames.base_link;
-    if (root) { robotModel.position.set(root[0], root[1], root[2]); robotModel.quaternion.set(root[3], root[4], root[5], root[6]); }
-    for (const [n, v] of Object.entries(joints)) if (robotModel.joints[n]) robotModel.setJointValue(n, v);
-  }
+    const root = (robotModel && frames[robotModel.urdfName]) || frames.base_link || bf;
+    robotTarget.pos.set(root[0], root[1], root[2]); robotTarget.quat.set(root[3], root[4], root[5], root[6]); robotTarget.yaw = yaw;
+    if (!robotTarget.has || !viewInit) {                              // first fix (or back after a loss): snap
+      robotPos.set(bf[0], bf[1], bf[2]); if (robotModel) { robotModel.position.copy(robotTarget.pos); robotModel.quaternion.copy(robotTarget.quat); }
+      if (!viewInit) { setView(robotPos.clone()); viewInit = true; }
+    }
+    robotTarget.has = true; robotTarget.t = performance.now();
+  } else { pose = null; robotTarget.has = false; }
+  if (robotModel) for (const [n, v] of Object.entries(joints)) if (robotModel.joints[n]) robotModel.setJointValue(n, v);
   if (on("#l-frames")) updateFrames();
   if (d.published && d.published.t > (pollTf.lastPub || 0)) { pollTf.lastPub = d.published.t; }
   halted = !!d.halted; const hb = $("#t-halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted);
@@ -531,8 +531,21 @@ function applyColor(k, hex) {
 }
 
 // ---------------------------------------------------------------- render loop + status
+let lastFrameT = performance.now();
 function animate() {
   requestAnimationFrame(animate);
+  const now = performance.now(), dt = Math.min(0.1, (now - lastFrameT) / 1000); lastFrameT = now;
+  if (robotTarget.has) {                                                // ease towards the latest TF (10 Hz) at 60 fps
+    const k = 1 - Math.exp(-dt / 0.08);
+    const prev = robotPos.clone();
+    robotPos.lerp(new THREE.Vector3(robotTarget.pos.x, robotTarget.pos.y, 0), k);
+    if (robotModel) { robotModel.position.lerp(robotTarget.pos, k); robotModel.quaternion.slerp(robotTarget.quat, k); }
+    robotRing.position.set(robotPos.x, robotPos.y, 0.04); robotHeading.position.set(robotPos.x, robotPos.y, 0.05);
+    robotHeading.setDirection(new THREE.Vector3(Math.cos(robotTarget.yaw), Math.sin(robotTarget.yaw), 0));
+    if (on("#follow")) { const d_ = robotPos.clone().sub(prev); controls.target.add(d_); camera.position.add(d_); }
+  }
+  robotRing.visible = robotHeading.visible = robotTarget.has && !(robotModel && on("#l-robot"));
+  if (robotModel) robotModel.visible = robotTarget.has && on("#l-robot");   // no live TF: no robot drawn (it was drawn where it used to be)
   controls.update(); renderer.render(scene, camera);
   stats.fN++; const now = performance.now(); if (now - stats.fT > 1000) { stats.fps = stats.fN; stats.fN = 0; stats.fT = now; }
   $("#status").textContent = `${simBadge}${pose ? `robot (${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}) ${(pose.yaw * 180 / Math.PI).toFixed(0)}°` : "no robot pose"} · ` +
@@ -544,7 +557,7 @@ function animate() {
   mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setTexture(mapMesh, MAP.image);
   setView(new THREE.Vector3(MAP.origin[0] + MAP.width * MAP.resolution / 2, MAP.origin[1] + MAP.height * MAP.resolution / 2, 0), 28, 30, 122);
   loadRoutes().catch(() => {});
-  loop(pollTf, 100); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
+  loop(pollTf, 66); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
   applyVisibility(); animate();
   if (window.initCams) initCams({ view: $("#view"), panel: $("#cam-panel"), top: 44 });   // below the tool buttons
   if (window.initSwatches) initSwatches({ page: "3d", apply: applyColor });
