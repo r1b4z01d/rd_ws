@@ -264,20 +264,18 @@ in order (base, localization, navigation, the rest), re-seed `/initialpose`.
 side N) all hang off the devkit's one onboard hub = ONE 480 Mbps USB 2 bus; only one of these webcams
 fits there at 1280x720 (verified 2026-10-30: the second one's stream-on fails with ENOSPC, hub or no
 hub, and the uvcvideo FIX_BANDWIDTH quirk only helps at 640x480). The two USB-C ports are separate
-root ports. So: scene on a USB-A jack, side in the dock on one USB-C (with the RealSense on the dock's
-USB 3 port via Intel's C-to-A cable), wrist alone on the other USB-C.
+root ports. Final cabling (2026-10-30): scene in the dock on USB-C F (path 1.1; the RealSense on the
+dock's USB 3 port via Intel's C-to-A cable, 5 Gbps), wrist alone on USB-C L (path 2), side on a USB-A
+jack (path 4.2) with the lidar adapter, Stream Deck and receivers.
 
 ![Jetson USB map as the kernel sees it](jetson/usb-layout.png)
 
 What `cameras.py` keys on is the USB *port path* (`platform-3610000.usb-usb-0:<root>.<hub>.<sub>`), so a
 camera keeps working across reboots but not across re-cabling. Rules learned on this box: at most two
 webcams per root port (each reserves its full USB 2 alt-setting), none behind a bus-powered hub; the
-RealSense needs a true USB 3 link (5000 Mbps on bus 2) or its depth+colour profile fails. Current map:
-side 2.4 (VIA dock on a USB-C port), scene 4.4 and the empty jack 4.2 on the devkit's own hub
-(Realtek 5420, the USB-A side), the S1 adapter + Stream Deck on the self-powered Genesys hub (4.3.x).
-After any re-cabling: `ls -l /dev/v4l/by-path/*video-index0`, grab a lit frame per port, update
-`_PORTS` in `VLA/ur5e_lerobot/sensors/cameras.py`, restart `vla_cameras` (and the camera ROS bridge if
-it was started before the network came up).
+RealSense needs a true USB 3 link (5000 Mbps on bus 2) or its depth+colour profile fails. After any re-cabling: `ls -l /dev/v4l/by-path/*video-index0`, grab a lit frame per port, update
+`_PORTS` in `VLA/ur5e_lerobot/sensors/cameras.py`, restart `vla_cameras` (the camera ROS bridge
+follows by itself since VLA 2747290; restart it only if it was started before the network came up).
 
 ## Disk layout on the Jetson (since 2026-10-26)
 
