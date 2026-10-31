@@ -13,6 +13,7 @@
   canvas { width: 100%; height: 100%; display: block; cursor: crosshair; background: #0b0c0f; }
   h1 { font-size: 15px; margin: 0; letter-spacing: .03em; }
   h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 6px 0 2px; }
+  hr.sep { border: 0; border-top: 1px solid var(--line); margin: 10px 0 4px; width: 100%; }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   /* labels in Title Case, rows justified across the side panel */
   .row { justify-content: space-between; width: 100%; }
@@ -97,7 +98,8 @@
   <div class="map-only"><h3>Cameras</h3><div class="row" id="cam-panel"></div></div>
   <h3>Waypoints <span class="muted" id="count"></span></h3>
   <div id="list"></div>
-  <h3>Selected</h3>
+  <hr class="sep">
+  <h3>Waypoint</h3>
   <div class="row"><input id="wname" placeholder="name" style="flex:1"></div>
   <div class="row">
     <label>x <input id="wx" type="number" step="0.01"></label>
