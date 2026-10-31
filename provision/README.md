@@ -257,7 +257,17 @@ in order (base, localization, navigation, the rest), re-seed `/initialpose`.
 
 ## USB layout on the Jetson (2026-10-30)
 
-![Jetson USB map](jetson/usb-layout.png)
+![Rear ports: dock on USB-C F, scene + small devices on the USB-A jacks](jetson/usb-ports-rear.png)
+![Side ports: wrist camera alone on USB-C L](jetson/usb-ports-side.png)
+
+(Port photos: RidgeRun's labelled AGX Orin devkit images, annotated.) The four USB-A jacks (rear I and
+side N) all hang off the devkit's one onboard hub = ONE 480 Mbps USB 2 bus; only one of these webcams
+fits there at 1280x720 (verified 2026-10-30: the second one's stream-on fails with ENOSPC, hub or no
+hub, and the uvcvideo FIX_BANDWIDTH quirk only helps at 640x480). The two USB-C ports are separate
+root ports. So: scene on a USB-A jack, side in the dock on one USB-C (with the RealSense on the dock's
+USB 3 port via Intel's C-to-A cable), wrist alone on the other USB-C.
+
+![Jetson USB map as the kernel sees it](jetson/usb-layout.png)
 
 What `cameras.py` keys on is the USB *port path* (`platform-3610000.usb-usb-0:<root>.<hub>.<sub>`), so a
 camera keeps working across reboots but not across re-cabling. Rules learned on this box: at most two
