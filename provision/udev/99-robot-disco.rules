@@ -24,6 +24,8 @@ KERNEL=="hidraw*", ATTRS{idVendor}=="0fd9", MODE="0666", TAG+="uaccess"
 # Xbox / generic gamepads for joy_node and VLA evdev teleop
 SUBSYSTEM=="input", GROUP="input", MODE="0660"
 
+# Fallback for the STOCK xpad only: the rebuilt module from provision/xpad has the ID in its table
+# (and sends the LED command the receiver needs before it streams); with it this rule is a no-op.
 # 8BitDo Ultimate 2C (2.4 GHz receiver) in X-input mode enumerates as 2dc8:310a with an Xbox 360
 # class interface (255/93/1). Kernels before 6.10 do not list that ID in xpad, so without this rule it
 # sits unbound and joy_node sees no /dev/input/js0 (the Jetson's 5.15 kernel, 2026-10-10). Writing

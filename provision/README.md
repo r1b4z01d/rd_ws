@@ -186,6 +186,10 @@ run needed are now in the scripts:
 - The 8BitDo Ultimate 2C gamepad (2.4 GHz receiver) in X-input mode shows up as `2dc8:310a` with
   an Xbox 360 class interface, which xpad on kernels before 6.10 does not list; a udev rule in
   `udev/99-robot-disco.rules` registers the ID with xpad so `/dev/input/js0` appears for joy_node.
+  **2026-10-31:** binding is not enough — the receiver sends nothing until xpad sends it the Xbox
+  LED command, and JetPack's xpad is built without LED/rumble output. Build and install the module
+  from `xpad/` (`xpad/install.sh --reload`; re-run after every kernel update), see `xpad/README.md`;
+  joy then sees the pad as "8BitDo Ultimate 2C Wireless Controller" (config/joystick.yaml).
   The controller must be in X-input mode (keyboard/mouse mode only yields a Keyboard + Mouse device).
 - `foxglove_bridge` comes from `src/foxglove_bridge` (C++ 0.8.5 submodule), not apt: the apt 3.x
   Rust bridge only accepts the `foxglove.sdk.v1` subprotocol, and the vendored Studio 1.87 speaks
