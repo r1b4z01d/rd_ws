@@ -437,14 +437,20 @@ def ros_pose_thread() -> None:
                     STATE["published"] = {**req, "t": time.time()}
             try:
                 tf = buf.lookup_transform("map", "base_footprint", rclpy.time.Time())
+                # Time() = "latest": tf2 happily returns a transform from minutes ago once odom or AMCL
+                # stop publishing (the page kept showing a pose with the base launch dead, 2026-10-31)
+                age = time.time() - (tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9)
+                if age > 5.0:
+                    raise RuntimeError(f"stale TF ({age:.0f} s old)")
                 t, q = tf.transform.translation, tf.transform.rotation
                 yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
                 STATE["pose"] = {"x": round(t.x, 4), "y": round(t.y, 4), "yaw": round(yaw, 4)}
                 STATE["pose_t"] = time.time()
                 STATE["ros"] = "ok"
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 if time.time() - STATE["pose_t"] > 3.0:
-                    STATE["ros"] = "no map->base_footprint (localization not running or not initialised)"
+                    STATE["ros"] = (f"no live map->base_footprint: {e}" if "stale" in str(e)
+                                    else "no map->base_footprint (localization not running or not initialised)")
             time.sleep(0.1)
     except Exception as e:  # noqa: BLE001
         STATE["ros"] = f"ros thread died: {e}"
