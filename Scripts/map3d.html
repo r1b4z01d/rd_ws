@@ -270,7 +270,7 @@ function updateFrames() {
 function lineObj(color, width) { const l = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color })); l.frustumCulled = false; scene.add(l); return l; }
 const planLine = lineObj(0x39d353), localPlanLine = lineObj(0x4fd6ff), routeLine = lineObj(0xfabe17);
 const polyLines = {}; const POLY_COLORS = { footprint: 0xb98cff, stop: 0xff4040, slowdown: 0xffa040 };
-const goalArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.7, 0xff4040, 0.25, 0.15); goalArrow.visible = false; scene.add(goalArrow);
+const goalArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 1.2, 0xff4040, 0.4, 0.24); goalArrow.visible = false; scene.add(goalArrow);
 const particles = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x8ab4ff, transparent: true, opacity: 0.7 })); particles.frustumCulled = false; scene.add(particles);
 const routePts = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, vertexColors: true })); routePts.frustumCulled = false; scene.add(routePts);
 function setLine(line, pts, z) {
@@ -357,7 +357,10 @@ async function haltClick() {
 }
 $("#t-halt").onclick = haltClick;
 const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-const preview = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.8, 0xffffff, 0.25, 0.15); preview.visible = false; scene.add(preview);
+// the arrow you drag while placing a nav goal / initial pose: big and bright, with a disc at its foot
+const preview = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 1.8, 0xffffff, 0.6, 0.36); preview.visible = false; scene.add(preview);
+preview.line.material.linewidth = 3;
+const previewDisc = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.32, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })); previewDisc.visible = false; scene.add(previewDisc);
 function floorPoint(e) {
   const r = canvas.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -365,7 +368,7 @@ function floorPoint(e) {
   return ray.ray.intersectPlane(floor, p) ? p : null;
 }
 function setTool(t) {
-  tool = t; controls.enabled = t === "orbit"; dragStart = null; preview.visible = false;
+  tool = t; controls.enabled = t === "orbit"; dragStart = null; preview.visible = false; previewDisc.visible = false;
   for (const id of ["orbit", "goal", "init", "cone"]) $(`#t-${id}`).classList.toggle("on", id === t);
   canvas.style.cursor = t === "orbit" ? "" : "crosshair";
   $("#hint").textContent = t === "orbit" ? "left drag = orbit · right drag = pan · wheel = zoom · tools top-right: click the floor and drag for the heading" + (isSim ? " · drag a cone to move it, shift-click to remove" : "")
@@ -389,7 +392,8 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (tool === "orbit") return;
   const p = floorPoint(e); if (!p) return;
-  dragStart = p; preview.position.set(p.x, p.y, 0.05); preview.setDirection(new THREE.Vector3(1, 0, 0)); preview.visible = true; canvas.setPointerCapture(e.pointerId);
+  dragStart = p; preview.position.set(p.x, p.y, 0.08); preview.setDirection(new THREE.Vector3(1, 0, 0)); preview.visible = true;
+  previewDisc.position.set(p.x, p.y, 0.07); previewDisc.visible = true; canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointermove", (e) => {
   if (coneDrag) {

@@ -239,10 +239,15 @@ function draw() {
     ctx.fillStyle = "#fff"; ctx.font = "11px sans-serif"; ctx.fillText(w.name, a + 9, b - 9);
   });
   // nav goal / initial pose being placed
-  if (poseDrag) {
-    const [a, b] = w2c(poseDrag.x, poseDrag.y); const L = Math.max(24, 0.8 / MAP.resolution * view.scale);
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a, b, 6, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(a + L * Math.cos(poseDrag.yaw), b - L * Math.sin(poseDrag.yaw)); ctx.stroke();
+  if (poseDrag) {                                   // big white arrow with a dark outline, head included
+    const [a, b] = w2c(poseDrag.x, poseDrag.y); const L = Math.max(60, 1.8 / MAP.resolution * view.scale);
+    const tx = a + L * Math.cos(poseDrag.yaw), ty = b - L * Math.sin(poseDrag.yaw), hd = Math.max(16, L * 0.22), ang = Math.atan2(-(ty - b), tx - a);
+    for (const [col, w] of [["rgba(0,0,0,.7)", 9], ["#fff", 5]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx - hd * Math.cos(ang - 0.5), ty + hd * Math.sin(ang - 0.5)); ctx.moveTo(tx, ty); ctx.lineTo(tx - hd * Math.cos(ang + 0.5), ty + hd * Math.sin(ang + 0.5)); ctx.stroke();
+      ctx.beginPath(); ctx.arc(a, b, 11, 0, Math.PI * 2); ctx.stroke();
+    }
   }
   // robot
   if (pose) {
