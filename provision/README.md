@@ -255,6 +255,20 @@ in order (base, localization, navigation, the rest), re-seed `/initialpose`.
 - The AmazingHand runs on its own host (`192.168.11.117` / `192.168.1.194`); nothing from
   `AmazingHand-main/` is installed on the robot PC.
 
+## USB layout on the Jetson (2026-10-30)
+
+![Jetson USB map](jetson/usb-layout.png)
+
+What `cameras.py` keys on is the USB *port path* (`platform-3610000.usb-usb-0:<root>.<hub>.<sub>`), so a
+camera keeps working across reboots but not across re-cabling. Rules learned on this box: at most two
+webcams per root port (each reserves its full USB 2 alt-setting), none behind a bus-powered hub; the
+RealSense needs a true USB 3 link (5000 Mbps on bus 2) or its depth+colour profile fails. Current map:
+side 2.4 (VIA dock on a USB-C port), scene 4.4 and the empty jack 4.2 on the devkit's own hub
+(Realtek 5420, the USB-A side), the S1 adapter + Stream Deck on the self-powered Genesys hub (4.3.x).
+After any re-cabling: `ls -l /dev/v4l/by-path/*video-index0`, grab a lit frame per port, update
+`_PORTS` in `VLA/ur5e_lerobot/sensors/cameras.py`, restart `vla_cameras` (and the camera ROS bridge if
+it was started before the network came up).
+
 ## Disk layout on the Jetson (since 2026-10-26)
 
 The 64 GB eMMC is the system disk and was filling up, so a 512 GB NVMe (ext4, label `data`) is mounted
