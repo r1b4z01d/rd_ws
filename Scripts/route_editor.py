@@ -339,6 +339,8 @@ def ros_pose_thread() -> None:
                 wanted = set(want.get("names") or []) if now_t - want.get("t", 0) < 3.0 else set()
                 scans = dict(STATE["scans"])
                 for name, m in list(latest.items()):
+                    if name not in SCAN_TOPICS and name not in CLOUD_TOPICS:
+                        continue                      # e.g. the AMCL particle cloud: not a scan layer
                     try:
                         if name in CLOUD_TOPICS:
                             if name not in wanted:        # the cloud is the expensive one: only when shown
