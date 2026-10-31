@@ -79,6 +79,8 @@ SCAN_MAX_POINTS = 720
 NAV_TOPICS = {"plan": "/plan", "local_plan": "/local_plan"}
 POLY_TOPICS = {"footprint": "/local_costmap/published_footprint", "stop": "/polygon_stop", "slowdown": "/polygon_slowdown"}
 CLOUD_BIN_MAX = 20000          # points per /api/cloud.bin answer (the Velodyne has ~29k per revolution)
+FRAME_FRESH_S = 5.0            # a transform stamped older than this is not a fresh fix ...
+FRAME_HOLD_S = 15.0            # ... but the last fresh fix is kept this long (the /tf listener lags in bursts)
 # camera feeds: the three VLA cameras (the camera service's UDP stream, republished as JPEG by
 # scripts/camera_ros_bridge.py) and the RealSense colour stream; served as MJPEG at /cam/<name>.mjpg
 CAMERA_TOPICS = {"scene": "/vla/cameras/scene/image/compressed", "side": "/vla/cameras/side/image/compressed",
@@ -173,8 +175,11 @@ def ros_pose_thread() -> None:
         rclpy.init()
         node = Node("route_editor")
         STATE["ros_up"] = True
-        buf = Buffer()
-        TransformListener(buf, node)
+        # the TF listener gets its OWN node: it spins in its own thread, and the main loop's spin_once on
+        # the data node can no longer steal / starve its callbacks (the shared node lagged /tf by seconds)
+        tf_node = Node("route_editor_tf")
+        buf = Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
+        TransformListener(buf, tf_node)
         latest: dict = {}
 
         def _keep(name):
@@ -314,6 +319,7 @@ def ros_pose_thread() -> None:
 
         last_scan_pub = 0.0
         frames_listed_t, frame_names = 0.0, []
+        frame_fresh_t: dict = {}                      # frame -> last time its transform was fresh
         scan_full: dict = {}                                   # name -> (n, 2) map-frame points, full resolution
 
         def _scan_full(m):
@@ -377,17 +383,22 @@ def ros_pose_thread() -> None:
                     except Exception:  # noqa: BLE001
                         frame_names = []
                 fr = {"map": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]}
+                fr_prev = STATE["frames"]
                 for f in frame_names:
                     try:
                         tf = buf.lookup_transform("map", f, rclpy.time.Time())
                         # "latest" can be minutes old once odom / AMCL stop: a stale frame is no frame
-                        # (the 3D page drew the robot and its scans where it WAS, 2026-10-31)
-                        if now_t - (tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9) > 5.0:
-                            continue
+                        # (the 3D page drew the robot and its scans where it WAS, 2026-10-31). But the
+                        # listener lags the busy /tf stream by a few seconds in bursts, so a frame is
+                        # HELD for FRAME_HOLD_S after its last fresh fix instead of blinking off.
+                        if now_t - (tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9) > FRAME_FRESH_S:
+                            raise RuntimeError("stale")
                         t, q = tf.transform.translation, tf.transform.rotation
                         fr[f] = [round(t.x, 4), round(t.y, 4), round(t.z, 4), round(q.x, 5), round(q.y, 5), round(q.z, 5), round(q.w, 5)]
-                    except Exception:  # noqa: BLE001 — frame not connected to map (yet)
-                        pass
+                        frame_fresh_t[f] = now_t
+                    except Exception:  # noqa: BLE001 — not connected to map (yet), or stale
+                        if f in fr_prev and now_t - frame_fresh_t.get(f, 0.0) < FRAME_HOLD_S:
+                            fr[f] = fr_prev[f]
                 STATE["frames"] = fr
                 polys_out = {}
                 for pname, pm in list(polys.items()):
@@ -444,7 +455,7 @@ def ros_pose_thread() -> None:
                 # Time() = "latest": tf2 happily returns a transform from minutes ago once odom or AMCL
                 # stop publishing (the page kept showing a pose with the base launch dead, 2026-10-31)
                 age = time.time() - (tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9)
-                if age > 5.0:
+                if age > FRAME_FRESH_S:
                     raise RuntimeError(f"stale TF ({age:.0f} s old)")
                 t, q = tf.transform.translation, tf.transform.rotation
                 yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
@@ -452,7 +463,7 @@ def ros_pose_thread() -> None:
                 STATE["pose_t"] = time.time()
                 STATE["ros"] = "ok"
             except Exception as e:  # noqa: BLE001
-                if time.time() - STATE["pose_t"] > 3.0:
+                if time.time() - STATE["pose_t"] > FRAME_HOLD_S:
                     STATE["ros"] = (f"no live map->base_footprint: {e}" if "stale" in str(e)
                                     else "no map->base_footprint (localization not running or not initialised)")
             time.sleep(0.1)
@@ -769,7 +780,7 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/route":
                 self._json(load_route(q["name"]))
             elif u.path == "/api/pose":
-                fresh = STATE["pose"] if time.time() - STATE["pose_t"] < 3.0 else None
+                fresh = STATE["pose"] if time.time() - STATE["pose_t"] < FRAME_HOLD_S else None
                 self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"], "ros_up": STATE["ros_up"]})
             elif u.path == "/api/costmap":
                 r = costmap_png(q.get("name", "global"), q.get("color"))
