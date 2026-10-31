@@ -25,7 +25,7 @@
   button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
   button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-  #halt { font-weight: 700; letter-spacing: .06em; margin-left: 10px; } #halt.halted { background: var(--ok); border-color: var(--ok); }
+  #halt { margin-top: auto; width: 100%; padding: 12px; font-size: 16px; font-weight: 700; letter-spacing: .08em; } #halt.halted { background: var(--ok); border-color: var(--ok); }
   #list { max-height: 30vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
   #list div { padding: 3px 8px; cursor: pointer; display: flex; justify-content: space-between; }
   #list div:hover { background: #2a2f3b; } #list div.sel { background: #30405f; }
@@ -55,7 +55,7 @@
 <div id="side">
   <div class="row" style="justify-content:space-between">
     <h1 id="title">Route editor</h1>
-    <span class="modes"><button id="mode-edit" class="accent edit-only" title="back to the route editor">Edit</button><button id="mode-map">Map</button><button onclick="location.href='/3d'" title="three.js scene: map, costmaps, Velodyne, URDF robot, plans">3D</button><button id="halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button></span>
+    <span class="modes"><button id="mode-edit" class="accent edit-only" title="back to the route editor">Edit</button><button id="mode-map">Map</button><button onclick="location.href='/3d'" title="three.js scene: map, costmaps, Velodyne, URDF robot, plans">3D</button></span>
   </div>
   <div class="row edit-only">
     <select id="routes" title="route file in Scripts/"></select>
@@ -114,6 +114,7 @@
   <textarea id="wactions" placeholder="- vla: tigger_1_merged_smolvla_1&#10;  task: Grab and hold tigger&#10;  done: closed&#10;  keep_grasp: true"></textarea>
   <h3>Output</h3>
   <pre id="out"></pre>
+  <button id="halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button>
   </div><!-- /edit-only -->
 </div>
 <div id="main">
