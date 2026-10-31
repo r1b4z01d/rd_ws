@@ -421,7 +421,10 @@ def ros_pose_thread() -> None:
                         goal_pub.publish(g)
                     else:
                         ip = PoseWithCovarianceStamped()
-                        ip.header.frame_id, ip.header.stamp = "map", stamp
+                        # stamp 0 = "latest" for tf2: with stamp=now AMCL looked the odom transform up at an
+                        # instant it did not have yet and dropped the pose ("Lookup would require
+                        # extrapolation into the future", seen 2026-10-30)
+                        ip.header.frame_id = "map"
                         ip.pose.pose.position.x, ip.pose.pose.position.y = req["x"], req["y"]
                         ip.pose.pose.orientation.z, ip.pose.pose.orientation.w = qz, qw
                         cov = [0.0] * 36
