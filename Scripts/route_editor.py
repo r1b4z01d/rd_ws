@@ -175,11 +175,21 @@ def ros_pose_thread() -> None:
         rclpy.init()
         node = Node("route_editor")
         STATE["ros_up"] = True
-        # the TF listener gets its OWN node: it spins in its own thread, and the main loop's spin_once on
-        # the data node can no longer steal / starve its callbacks (the shared node lagged /tf by seconds)
+        # The TF listener gets its OWN node and (explicitly!) its own spin thread: rclpy's
+        # TransformListener defaults to spin_thread=False, so without it nothing ever services the
+        # listener. Before 2026-10-31 it shared the data node and was serviced by the loop's single
+        # spin_once per 100 ms — one /tf message per iteration against a 70 Hz stream — so the buffer
+        # trailed reality by seconds and the robot blinked / lagged / showed a stale pose.
         tf_node = Node("route_editor_tf")
         buf = Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
-        TransformListener(buf, tf_node)
+        TransformListener(buf, tf_node, spin_thread=True)
+        # the data node (scans, clouds, cameras, costmaps, joints ...) likewise spins on its own thread,
+        # continuously; the loop below only computes and never throttles callbacks
+        from rclpy.executors import SingleThreadedExecutor
+
+        data_exec = SingleThreadedExecutor()
+        data_exec.add_node(node)
+        threading.Thread(target=data_exec.spin, daemon=True, name="route_editor-spin").start()
         latest: dict = {}
 
         def _keep(name):
@@ -337,7 +347,7 @@ def ros_pose_thread() -> None:
             return np.stack([t.x + px * math.cos(yaw) - py * math.sin(yaw), t.y + px * math.sin(yaw) + py * math.cos(yaw)], 1)
         STATE["ros"] = "waiting for TF map->base_footprint"
         while True:
-            rclpy.spin_once(node, timeout_sec=0.2)
+            time.sleep(0.05)
             now_t = time.time()
             if now_t - last_scan_pub > 0.2:      # ~5 Hz is plenty for a browser
                 last_scan_pub = now_t
@@ -384,6 +394,18 @@ def ros_pose_thread() -> None:
                         frame_names = []
                 fr = {"map": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]}
                 fr_prev = STATE["frames"]
+                dbg = {"frames_in_buffer": len(frame_names), "t": round(now_t, 1)}
+                try:
+                    _tf = buf.lookup_transform("odom", "base_footprint", rclpy.time.Time())
+                    dbg["odom_base_age_s"] = round(now_t - (_tf.header.stamp.sec + _tf.header.stamp.nanosec * 1e-9), 2)
+                except Exception as _e:  # noqa: BLE001
+                    dbg["odom_base"] = str(_e)[:80]
+                try:
+                    _tf = buf.lookup_transform("map", "odom", rclpy.time.Time())
+                    dbg["map_odom_age_s"] = round(now_t - (_tf.header.stamp.sec + _tf.header.stamp.nanosec * 1e-9), 2)
+                except Exception as _e:  # noqa: BLE001
+                    dbg["map_odom"] = str(_e)[:80]
+                STATE["tf_debug"] = dbg
                 for f in frame_names:
                     try:
                         tf = buf.lookup_transform("map", f, rclpy.time.Time())
@@ -822,7 +844,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "no /robot_description received yet (is the base launch running?)"}, 503)
             elif u.path == "/api/tf":
                 self._json({"frames": STATE["frames"], "joints": STATE["joints"], "t": time.time(), "ros": STATE["ros"],
-                            "published": STATE["published"], "sim": STATE["sim"], "halted": STATE["halted"]})
+                            "published": STATE["published"], "sim": STATE["sim"], "halted": STATE["halted"],
+                            "tf_debug": STATE.get("tf_debug")})
             elif u.path == "/api/cloud.bin":
                 name = q.get("name", "velodyne")
                 b = cloud_bin(name, int(q.get("max", CLOUD_BIN_MAX)))
