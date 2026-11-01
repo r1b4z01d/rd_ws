@@ -44,3 +44,6 @@ __pycache__
 
 # foxglove_studio/packages/log is a yarn workspace (@foxglove/log), not a log directory
 !foxglove_studio/packages/log/
+
+# the robot's landmark photos (route_editor.py Landmarks API; the YAML next to them is tracked)
+Scripts/landmarks/img/

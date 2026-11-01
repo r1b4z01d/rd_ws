@@ -24,6 +24,11 @@ a route and fabricates every input above from the map alone — scans and a Velo
 against the walls, costmaps, TF, joints, plans, the URDF (sim/robot_sim.urdf, or the real one after
 sim/fetch_assets.sh) — so both pages, and the manager's Map/3D tabs, work on any laptop.
 
+Landmarks (`/api/landmarks*`, the manager's Landmarks tab): named places the robot can navigate to. One is
+taken from where the robot stands — its map pose, the map's name, the side and scene cameras stitched
+into one photo and the RealSense frame — and kept in landmarks/landmarks.yaml (+ landmarks/img/) next
+to the routes; "go" queues the pose as a /goal_pose like the 3D page's click tool.
+
 What it does: draws the nav2 map (the same zone_one.yaml AMCL uses) with a 1 m grid, loads any route
 .yaml from this directory (and the matching .raw.yaml trace, greyed), shows the robot's live map pose,
 and edits the route: click on the map to add a waypoint after the selected one, drag to move, shift-drag
@@ -41,6 +46,7 @@ import io
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -141,6 +147,124 @@ def put_jpeg(name: str, data: bytes) -> None:
         e = STATE["jpeg"].get(name)
         STATE["jpeg"][name] = {"data": data, "seq": (e["seq"] + 1) if e else 1, "t": time.time()}
         JPEG_CV.notify_all()
+
+
+# --------------------------------------------------------------------------- landmarks
+# Named places the robot can navigate to (the manager's Landmarks tab): a pose in the map frame taken from
+# the robot's live position, the map it belongs to, and two photos taken at that moment — the side and
+# scene cameras stitched side by side, and the RealSense colour frame. Stored next to the routes
+# (landmarks/landmarks.yaml, photos in landmarks/img/; deploys rsync without --delete, so the robot's own
+# entries survive code syncs). "goto" queues the pose as a /goal_pose like the 3D page's click tool.
+LANDMARKS_LOCK = threading.Lock()
+CAPTURE_FRESH_S = 5.0          # a camera frame older than this is "no frame" for a capture
+LANDMARK_CAMS = ("side", "scene", "realsense")
+
+
+def landmarks_dir() -> Path:
+    d = Path(ARGS.landmarks_dir) if getattr(ARGS, "landmarks_dir", None) else HERE / "landmarks"
+    (d / "img").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def current_map_name() -> "str | None":
+    return Path(STATE["map"]["name"]).stem if STATE.get("map") else None
+
+
+def load_landmarks() -> list:
+    p = landmarks_dir() / "landmarks.yaml"
+    if not p.exists():
+        return []
+    return list((yaml.safe_load(open(p)) or {}).get("landmarks") or [])
+
+
+def save_landmarks(items: list) -> None:
+    p = landmarks_dir() / "landmarks.yaml"
+    head = (f"# landmarks.yaml — named places the robot can navigate to; written by route_editor.py (the manager's "
+            f"Landmarks tab) on {time.strftime('%Y-%m-%d %H:%M')} ({len(items)} landmarks).\n"
+            "# x / y / yaw are in the map frame of `map`; the photos live in img/ next to this file.\n")
+    tmp = p.with_name("landmarks.yaml.tmp")
+    tmp.write_text(head + yaml.safe_dump({"landmarks": items}, sort_keys=False, allow_unicode=True))
+    tmp.replace(p)
+
+
+def landmark_id(name: str, taken: set) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "landmark"
+    lid, n = base, 2
+    while lid in taken:
+        lid, n = f"{base}-{n}", n + 1
+    return lid
+
+
+def fresh_jpeg(name: str) -> "bytes | None":
+    e = STATE["jpeg"].get(name)
+    STATE["cam_want"][name] = time.time()
+    return e["data"] if e and time.time() - e["t"] < CAPTURE_FRESH_S else None
+
+
+def _label_font(size: int):
+    from PIL import ImageFont
+
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                 "/System/Library/Fonts/Helvetica.ttc"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:  # noqa: BLE001
+            continue
+    try:
+        return ImageFont.load_default(size)          # Pillow >= 10.1
+    except Exception:  # noqa: BLE001
+        return ImageFont.load_default()
+
+
+def stitch_jpegs(parts: list) -> "bytes | None":
+    """[(label, jpeg bytes | None)] side by side at a common height, each part labelled; None when nothing decodes."""
+    from PIL import Image, ImageDraw
+
+    ims = []
+    for label, data in parts:
+        if data:
+            try:
+                ims.append((label, Image.open(io.BytesIO(data)).convert("RGB")))
+            except Exception:  # noqa: BLE001 — a truncated frame: leave it out
+                pass
+    if not ims:
+        return None
+    h = max(im.size[1] for _, im in ims)
+    ims = [(lb, im if im.size[1] == h else im.resize((round(im.size[0] * h / im.size[1]), h))) for lb, im in ims]
+    out = Image.new("RGB", (sum(im.size[0] for _, im in ims), h))
+    draw, font, x = ImageDraw.Draw(out), _label_font(max(14, h // 22)), 0
+    for lb, im in ims:
+        out.paste(im, (x, 0))
+        draw.text((x + 10, 10), lb, fill=(0, 0, 0), font=font)
+        draw.text((x + 8, 8), lb, fill=(255, 255, 255), font=font)
+        x += im.size[0]
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=88)
+    return buf.getvalue()
+
+
+def capture_landmark(lid: str, want_pose: bool = True, want_images: bool = True) -> dict:
+    """What a landmark takes from the robot right now: its map pose and/or the photos. LookupError = no pose."""
+    out: dict = {}
+    if want_pose:
+        if STATE["pose"] is None or time.time() - STATE["pose_t"] > FRAME_HOLD_S:
+            raise LookupError(f"no robot pose: {STATE['ros']}")
+        out.update(STATE["pose"])
+    if want_images:
+        frames = {n: fresh_jpeg(n) for n in LANDMARK_CAMS}
+        d = landmarks_dir() / "img"
+        images = {"stitched": None, "realsense": None}
+        stitched = stitch_jpegs([("side", frames["side"]), ("scene", frames["scene"])])
+        if stitched:
+            (d / f"{lid}_stitched.jpg").write_bytes(stitched)
+            images["stitched"] = f"{lid}_stitched.jpg"
+        if frames["realsense"]:
+            (d / f"{lid}_realsense.jpg").write_bytes(frames["realsense"])
+            images["realsense"] = f"{lid}_realsense.jpg"
+        out["images"] = images
+        out["cameras"] = [n for n in LANDMARK_CAMS if frames[n]]
+        out["missing"] = [n for n in LANDMARK_CAMS if not frames[n]]
+    return out
 
 
 # --------------------------------------------------------------------------- map
@@ -876,6 +1000,21 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, e["data"], "image/jpeg")
                 else:
                     self._send(404, b"no frame yet", "text/plain")
+            elif u.path == "/api/landmarks":
+                now = time.time()
+                with LANDMARKS_LOCK:
+                    items = load_landmarks()
+                self._json({"landmarks": items, "map": current_map_name(),
+                            "pose": STATE["pose"] if now - STATE["pose_t"] < FRAME_HOLD_S else None,
+                            "ros": STATE["ros"], "ros_up": STATE["ros_up"], "sim": STATE["sim"],
+                            "cameras": {n: n in STATE["jpeg"] and now - STATE["jpeg"][n]["t"] < CAPTURE_FRESH_S for n in LANDMARK_CAMS}})
+            elif u.path.startswith("/landmarks/img/"):
+                base = (landmarks_dir() / "img").resolve()
+                p = (base / u.path[len("/landmarks/img/"):]).resolve()
+                if p.parent == base and p.suffix == ".jpg" and p.is_file():
+                    self._send(200, p.read_bytes(), "image/jpeg")
+                else:
+                    self._send(404, b"no such image", "text/plain")
             elif u.path == "/api/obstacles":
                 self._json({"obstacles": STATE["nav"].get("obstacles") or [], "sim": STATE["sim"]})
             elif u.path == "/api/nav":
@@ -921,6 +1060,9 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["publish_q"].append(req)
                 self._json({"ok": True, "queued": req})
                 return
+            if u.path == "/api/landmarks" or u.path.startswith("/api/landmarks/"):
+                self._landmarks_post(u.path, body)
+                return
             name = q.get("name") or body.get("name") or ""
             if not name or "/" in name or name.startswith("."):
                 self._json({"error": "bad route name"}, 400)
@@ -932,6 +1074,107 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "output": out, "route": load_route(name)})
             else:
                 self._send(404, b"not found", "text/plain")
+        except Exception as e:  # noqa: BLE001
+            self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    def _landmarks_post(self, path: str, body: dict) -> None:
+        """POST /api/landmarks (add at the robot) · /api/landmarks/<id> (edit name / x / y / yaw) ·
+        /api/landmarks/<id>/goto (queue a /goal_pose) · /api/landmarks/<id>/recapture ({pose, images})."""
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with LANDMARKS_LOCK:
+            items = load_landmarks()
+            if path == "/api/landmarks":
+                name = str(body.get("name") or "").strip()
+                if not name:
+                    self._json({"error": "a landmark needs a name"}, 400)
+                    return
+                if any(i["name"].lower() == name.lower() for i in items):
+                    self._json({"error": f"a landmark named {name!r} exists"}, 409)
+                    return
+                lid = landmark_id(name, {i["id"] for i in items})
+                given = all(k in body for k in ("x", "y", "yaw"))      # a pose typed in instead of the robot's
+                try:
+                    cap = capture_landmark(lid, want_pose=not given)
+                except LookupError as e:
+                    self._json({"error": str(e)}, 503)
+                    return
+                entry = {"id": lid, "name": name, "map": current_map_name(),
+                         "x": round(float(body["x"] if given else cap["x"]), 4), "y": round(float(body["y"] if given else cap["y"]), 4),
+                         "yaw": round(float(body["yaw"] if given else cap["yaw"]), 4),
+                         "created": stamp, "updated": stamp, "images": cap["images"], "cameras": cap["cameras"]}
+                items.append(entry)
+                save_landmarks(items)
+                self._json({"ok": True, "landmark": entry, "missing": cap["missing"]})
+                return
+            lid, _, action = path[len("/api/landmarks/"):].partition("/")
+            entry = next((i for i in items if i["id"] == lid), None)
+            if entry is None:
+                self._json({"error": f"no landmark {lid!r}"}, 404)
+                return
+            if action == "goto":
+                if not STATE["ros_up"]:
+                    self._json({"error": "the ROS node is not up (started with --no-ros, or rclpy is missing)"}, 503)
+                    return
+                if entry.get("map") != current_map_name():
+                    self._json({"error": f"{entry['name']!r} belongs to map {entry.get('map')!r}; the robot runs {current_map_name()!r}"}, 409)
+                    return
+                req = {"type": "goal", "x": float(entry["x"]), "y": float(entry["y"]), "yaw": float(entry["yaw"])}
+                STATE["publish_q"].append(req)
+                self._json({"ok": True, "queued": req, "landmark": entry["name"]})
+                return
+            if action == "recapture":
+                want_pose, want_images = bool(body.get("pose")), bool(body.get("images", True))
+                try:
+                    cap = capture_landmark(lid, want_pose=want_pose, want_images=want_images)
+                except LookupError as e:
+                    self._json({"error": str(e)}, 503)
+                    return
+                if want_pose:
+                    entry.update({"x": cap["x"], "y": cap["y"], "yaw": cap["yaw"], "map": current_map_name()})
+                if want_images:
+                    entry["images"], entry["cameras"] = cap["images"], cap["cameras"]
+                entry["updated"] = stamp
+                save_landmarks(items)
+                self._json({"ok": True, "landmark": entry, "missing": cap.get("missing", [])})
+                return
+            if action == "":
+                if "name" in body:
+                    name = str(body["name"]).strip()
+                    if not name:
+                        self._json({"error": "a landmark needs a name"}, 400)
+                        return
+                    if any(i is not entry and i["name"].lower() == name.lower() for i in items):
+                        self._json({"error": f"a landmark named {name!r} exists"}, 409)
+                        return
+                    entry["name"] = name
+                for k in ("x", "y", "yaw"):
+                    if k in body:
+                        entry[k] = round(float(body[k]), 4)
+                entry["updated"] = stamp
+                save_landmarks(items)
+                self._json({"ok": True, "landmark": entry})
+                return
+            self._json({"error": f"unknown landmark action {action!r}"}, 404)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        u = urlparse(self.path)
+        try:
+            if not u.path.startswith("/api/landmarks/"):
+                self._send(404, b"not found", "text/plain")
+                return
+            lid = u.path[len("/api/landmarks/"):]
+            with LANDMARKS_LOCK:
+                items = load_landmarks()
+                entry = next((i for i in items if i["id"] == lid), None)
+                if entry is None:
+                    self._json({"error": f"no landmark {lid!r}"}, 404)
+                    return
+                items.remove(entry)
+                save_landmarks(items)
+            for f in (entry.get("images") or {}).values():
+                if f:
+                    (landmarks_dir() / "img" / f).unlink(missing_ok=True)
+            self._json({"ok": True, "deleted": entry["name"]})
         except Exception as e:  # noqa: BLE001
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
@@ -951,6 +1194,8 @@ def main() -> int:
     ap.add_argument("--raw-scans", action="store_true", help="draw the lidar drivers' raw scans instead of the filtered ones")
     ap.add_argument("--scan-topics", default=None, metavar="name=topic,...",
                     help="override the scan topics drawn on the map (default: the filtered RPLiDAR scans)")
+    ap.add_argument("--landmarks-dir", type=Path, default=None, metavar="DIR",
+                    help="where landmarks.yaml and its photos live (default: Scripts/landmarks, next to the routes)")
     ARGS = ap.parse_args()
     if ARGS.scan_topics:
         SCAN_TOPICS.clear()
