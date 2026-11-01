@@ -27,7 +27,10 @@ sim/fetch_assets.sh) — so both pages, and the manager's Map/3D tabs, work on a
 Landmarks (`/api/landmarks*`, the manager's Landmarks tab): named places the robot can navigate to. One is
 taken from where the robot stands — its map pose, the map's name, the side and scene cameras stitched
 into one photo and the RealSense frame — and kept in landmarks/landmarks.yaml (+ landmarks/img/) next
-to the routes; "go" queues the pose as a /goal_pose like the 3D page's click tool.
+to the routes; "go" queues the pose as a /goal_pose like the 3D page's click tool. A landmark's TASKS
+(`/api/landmarks/<id>/tasks*`) tie a policy run to the place: name (what you say), model, task string and the
+vla_action.py options; the voice assistant reads the same file ("Robot Disco, pick up tigger" = drive there,
+run it) and "run" hands it the job over /robot_voice/run_task.
 
 What it does: draws the nav2 map (the same zone_one.yaml AMCL uses) with a 1 m grid, loads any route
 .yaml from this directory (and the matching .raw.yaml trace, greyed), shows the robot's live map pose,
@@ -68,7 +71,8 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                "publish_q": [], "published": None, "want3d": {}, "sim": False,
                "jpeg": {}, "cam_want": {},          # name -> {data, seq, t}; name -> last time a viewer pulled it
                "halted": False,                     # the simulator's halt latch (the robot has no latch: goals are gone)
-               "ros_up": False}                     # the ROS node (or the simulator) is running — publishing is possible
+               "ros_up": False,                     # the ROS node (or the simulator) is running — publishing is possible
+               "voice_listeners": 0}                # subscribers on the voice assistant's run_task topic (0 = nobody would run a task)
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -185,6 +189,53 @@ def save_landmarks(items: list) -> None:
     tmp = p.with_name("landmarks.yaml.tmp")
     tmp.write_text(head + yaml.safe_dump({"landmarks": items}, sort_keys=False, allow_unicode=True))
     tmp.replace(p)
+
+
+# A landmark's TASKS tie a policy run (an eval, VLA/scripts/vla_action.py) to the place it is done at:
+# "pick up tigger" = drive to the right bookshelf, then run tigger_1_merged_smolvla_1 with the task string
+# "Grab and hold tigger". The voice assistant (rd_ws/src/robot_voice) reads landmarks.yaml for the phrases it
+# answers to and does the driving + the run; "run" here only hands it the job over the run_task topic.
+TASK_FIELDS = ("name", "model", "task", "seconds", "still", "done_when", "keep_grasp", "home", "still_mode", "min_seconds", "extra")
+TASK_DEFAULTS = {"seconds": 120.0, "still": 0.0, "done_when": "none", "keep_grasp": False, "home": True}
+VOICE_TASK_TOPIC = "/robot_voice/run_task"
+
+
+def task_from_body(body: dict, cur: "dict | None" = None) -> dict:
+    """A task entry from a POST body (all fields optional when editing `cur`). ValueError = bad input."""
+    out = dict(cur or {})
+    for k in TASK_FIELDS:
+        if k not in body:
+            continue
+        v = body[k]
+        if k in ("name", "model", "task", "still_mode", "extra", "done_when"):
+            v = str(v or "").strip()
+            if k == "done_when" and v not in ("", "none", "closed", "open"):
+                raise ValueError("done_when must be none, closed or open")
+            if k == "still_mode" and v not in ("", "all", "fingers"):
+                raise ValueError("still_mode must be all or fingers")
+            out[k] = v
+        elif k in ("seconds", "still", "min_seconds"):
+            if v in ("", None):
+                out.pop(k, None)
+            else:
+                out[k] = round(float(v), 2)
+        else:   # keep_grasp, home
+            out[k] = bool(v)
+    for k in ("name", "model", "task"):
+        if not out.get(k):
+            raise ValueError(f"a task needs a {k}" + (" (what you say to the robot)" if k == "name" else
+                             " (the training run to serve)" if k == "model" else " (the instruction the policy was trained with)"))
+    for k, d in TASK_DEFAULTS.items():
+        out.setdefault(k, d)
+    return out
+
+
+def task_id(name: str, taken: set) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "task"
+    tid, n = base, 2
+    while tid in taken:
+        tid, n = f"{base}-{n}", n + 1
+    return tid
 
 
 def landmark_id(name: str, taken: set) -> str:
@@ -389,6 +440,9 @@ def ros_pose_thread() -> None:
         # transient-local so a late or latched-expecting subscriber (one asked for DURABILITY) still matches
         goal_pub = node.create_publisher(PoseStamped, "/goal_pose", cm_qos)
         init_pub = node.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        # a landmark task "run" (the manager's Landmarks tab): the voice assistant drives + runs the policy
+        from std_msgs.msg import String as StringMsg
+        task_pub = node.create_publisher(StringMsg, VOICE_TASK_TOPIC, 10)
         # HALT: cancel every nav2 goal (an empty CancelGoal request = all goals of that server) and
         # push zero velocity where it wins — the joystick mux input (priority 100) and the controller
         from action_msgs.srv import CancelGoal
@@ -563,8 +617,13 @@ def ros_pose_thread() -> None:
                     step = max(1, len(ps) // 1500)
                     STATE["particles"] = [[round(p.pose.position.x, 3), round(p.pose.position.y, 3), round(_yaw(p.pose.orientation), 3)]
                                           for p in ps[::step]]
+                STATE["voice_listeners"] = task_pub.get_subscription_count()
                 while STATE["publish_q"]:
                     req = STATE["publish_q"].pop(0)
+                    if req["type"] == "task":
+                        task_pub.publish(StringMsg(data=json.dumps({k: v for k, v in req.items() if k != "type"})))
+                        STATE["published"] = {**req, "t": time.time()}
+                        continue
                     if req["type"] == "halt":
                         cancelled = [a for a, cl in cancel_clients.items() if cl.service_is_ready() and cl.call_async(CancelGoal.Request())]
                         zero = Twist()
@@ -1007,6 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"landmarks": items, "map": current_map_name(),
                             "pose": STATE["pose"] if now - STATE["pose_t"] < FRAME_HOLD_S else None,
                             "ros": STATE["ros"], "ros_up": STATE["ros_up"], "sim": STATE["sim"],
+                            "voice": bool(STATE["voice_listeners"]),   # the voice assistant would take a task run
                             "cameras": {n: n in STATE["jpeg"] and now - STATE["jpeg"][n]["t"] < CAPTURE_FRESH_S for n in LANDMARK_CAMS}})
             elif u.path.startswith("/landmarks/img/"):
                 base = (landmarks_dir() / "img").resolve()
@@ -1137,6 +1197,9 @@ class Handler(BaseHTTPRequestHandler):
                 save_landmarks(items)
                 self._json({"ok": True, "landmark": entry, "missing": cap.get("missing", [])})
                 return
+            if action == "tasks" or action.startswith("tasks/"):
+                self._task_post(items, entry, action[len("tasks"):].strip("/"), body, stamp)
+                return
             if action == "":
                 if "name" in body:
                     name = str(body["name"]).strip()
@@ -1156,18 +1219,90 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"error": f"unknown landmark action {action!r}"}, 404)
 
+    def _task_post(self, items: list, entry: dict, rest: str, body: dict, stamp: str) -> None:
+        """POST /api/landmarks/<id>/tasks (add) · /tasks/<tid> (edit) · /tasks/<tid>/run (hand it to the voice
+        assistant: it drives to the landmark and runs the policy). Called under LANDMARKS_LOCK."""
+        tasks = entry.setdefault("tasks", [])
+        if rest == "":
+            name = str(body.get("name") or "").strip()
+            if any(t["name"].lower() == name.lower() for t in tasks) and name:
+                self._json({"error": f"{entry['name']!r} already has a task {name!r}"}, 409)
+                return
+            try:
+                t = task_from_body(body)
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+                return
+            t = {"id": task_id(name, {x["id"] for x in tasks}), **t, "created": stamp}
+            tasks.append(t)
+            entry["updated"] = stamp
+            save_landmarks(items)
+            self._json({"ok": True, "task": t, "landmark": entry["name"]})
+            return
+        tid, _, sub = rest.partition("/")
+        t = next((x for x in tasks if x["id"] == tid), None)
+        if t is None:
+            self._json({"error": f"no task {tid!r} on {entry['name']!r}"}, 404)
+            return
+        if sub == "":
+            name = str(body.get("name", t["name"]) or "").strip()
+            if any(x is not t and x["name"].lower() == name.lower() for x in tasks):
+                self._json({"error": f"{entry['name']!r} already has a task {name!r}"}, 409)
+                return
+            try:
+                new = task_from_body(body, t)
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+                return
+            t.clear(); t.update(new)
+            entry["updated"] = stamp
+            save_landmarks(items)
+            self._json({"ok": True, "task": t, "landmark": entry["name"]})
+            return
+        if sub == "run":
+            msg = {"landmark": entry["id"], "task": t["id"], "say": t["name"], "from": "manager", "t": time.time()}
+            if STATE["sim"]:
+                STATE["published"] = {"type": "task", **msg}
+                self._json({"ok": True, "sim": True, "sent": msg, "note": "simulation: no voice assistant, nothing runs"})
+                return
+            if not STATE["ros_up"]:
+                self._json({"error": "the ROS node is not up (started with --no-ros, or rclpy is missing)"}, 503)
+                return
+            if entry.get("map") != current_map_name():
+                self._json({"error": f"{entry['name']!r} belongs to map {entry.get('map')!r}; the robot runs {current_map_name()!r}"}, 409)
+                return
+            if not STATE["voice_listeners"]:
+                self._json({"error": f"the voice assistant (robot_voice) is not listening on {VOICE_TASK_TOPIC}; start it from the Services tab"}, 503)
+                return
+            STATE["publish_q"].append({"type": "task", **msg})
+            self._json({"ok": True, "sent": msg, "landmark": entry["name"]})
+            return
+        self._json({"error": f"unknown task action {sub!r}"}, 404)
+
     def do_DELETE(self) -> None:  # noqa: N802
         u = urlparse(self.path)
         try:
             if not u.path.startswith("/api/landmarks/"):
                 self._send(404, b"not found", "text/plain")
                 return
-            lid = u.path[len("/api/landmarks/"):]
+            lid, _, rest = u.path[len("/api/landmarks/"):].partition("/")
             with LANDMARKS_LOCK:
                 items = load_landmarks()
                 entry = next((i for i in items if i["id"] == lid), None)
                 if entry is None:
                     self._json({"error": f"no landmark {lid!r}"}, 404)
+                    return
+                if rest.startswith("tasks/"):           # DELETE /api/landmarks/<id>/tasks/<tid>
+                    tid = rest[len("tasks/"):]
+                    tasks = entry.get("tasks") or []
+                    t = next((x for x in tasks if x["id"] == tid), None)
+                    if t is None:
+                        self._json({"error": f"no task {tid!r} on {entry['name']!r}"}, 404)
+                        return
+                    tasks.remove(t)
+                    entry["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    save_landmarks(items)
+                    self._json({"ok": True, "deleted": t["name"], "landmark": entry["name"]})
                     return
                 items.remove(entry)
                 save_landmarks(items)
