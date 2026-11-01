@@ -254,7 +254,7 @@ def capture_landmark(lid: str, want_pose: bool = True, want_images: bool = True)
         frames = {n: fresh_jpeg(n) for n in LANDMARK_CAMS}
         d = landmarks_dir() / "img"
         images = {"stitched": None, "realsense": None}
-        stitched = stitch_jpegs([("side", frames["side"]), ("scene", frames["scene"])])
+        stitched = stitch_jpegs([("scene", frames["scene"]), ("side", frames["side"])])   # scene left, side right
         if stitched:
             (d / f"{lid}_stitched.jpg").write_bytes(stitched)
             images["stitched"] = f"{lid}_stitched.jpg"
