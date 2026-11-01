@@ -47,6 +47,7 @@
   .modes button { padding: 4px 10px; } .modes button + button { margin-left: 4px; }
   body.map-mode .edit-only { display: none !important; }
   body:not(.map-mode) .map-only { display: none !important; }
+  body:not(.map-mode) .modes { display: none; }       /* the route editor has no Edit / Map / 3D switch: the manager's tabs do that */
   #legend { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; display: none; }
   body.map-mode #legend { display: block; } body.map-mode #help { display: none; }
   .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
