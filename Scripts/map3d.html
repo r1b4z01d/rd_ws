@@ -33,9 +33,12 @@
   .muted { color: var(--muted); } .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
   #view { flex: 1; position: relative; min-width: 0; }
   canvas { display: block; width: 100%; height: 100%; }
-  #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none; }
+  /* telemetry line: bright and bold with a drop shadow so it reads against the dark canvas */
+  #status { position: absolute; left: 10px; top: 8px; background: rgba(0,0,0,.6); padding: 4px 8px; border-radius: 6px; font-size: 12px; pointer-events: none;
+            color: #f3f4f6; font-weight: bold; text-shadow: 1px 1px 2px #000; max-width: calc(100% - 340px); }   /* wraps before the floating tool bar */
   #hint { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; color: var(--muted); max-width: 520px; }
-  #toolbar { position: absolute; right: 10px; top: 8px; display: flex; gap: 6px; }
+  /* floating tool bar inside the 3D viewport (orbit / nav goal / initial pose; cone in the simulator) */
+  #toolbar { position: absolute; right: 10px; top: 8px; z-index: 2; display: flex; gap: 6px; padding: 4px; background: rgba(0,0,0,.6); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(4px); }
   #toolbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   #side button.halt { margin-top: auto; width: 100%; padding: 12px; font-size: 16px; font-weight: 700; letter-spacing: .08em; }
   #side button.halt.halted { background: var(--ok); border-color: var(--ok); color: #fff; }
@@ -47,6 +50,16 @@
   details.settings summary::-webkit-details-marker { display: none; }
   details.settings .caret::before { content: "▸ Settings"; color: var(--muted); font-size: 12px; } details.settings[open] .caret::before { content: "▾ Settings"; }
   details.settings .row { margin: 6px 0 0 4px; }
+  /* collapsible side sections (accordion): click the heading to fold it; the checkbox lists inside are a 2-column grid */
+  .acc .acc-head { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; border-radius: 6px; margin: 6px -4px 0; padding: 2px 4px; }
+  .acc .acc-head:hover { background: #2a2e38; color: var(--fg); }
+  .acc .acc-head:focus-visible { outline: 1px dashed var(--muted); outline-offset: 1px; }
+  .acc .acc-head::before { content: "▸"; width: 10px; font-size: 11px; }
+  .acc.open .acc-head::before { content: "▾"; }
+  .acc .acc-body { display: none; }
+  .acc.open .acc-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+  .acc .row.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+  .acc .row.grid > label.cb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 </style>
 <script type="importmap">
 { "imports": { "three": "/static/vendor/three.module.min.js",
@@ -58,8 +71,10 @@
 <div id="app">
   <div id="side">
     <h2>3D <span><button onclick="location.href='/?view=map'">2D map</button></span></h2>
-    <h3>Scene</h3>
-    <div class="row">
+    <section class="acc open" data-acc="scene">
+    <h3 class="acc-head" role="button" tabindex="0" aria-expanded="true">Scene</h3>
+    <div class="acc-body">
+    <div class="row grid">
       <label class="cb"><input type="checkbox" id="l-map" checked> map</label>
       <label class="cb" title="draw the nav map with its colours inverted (dark free space, light walls)"><input type="checkbox" id="l-invert" checked> invert map</label>
       <label class="cb"><input type="checkbox" id="l-grid"> grid</label>
@@ -67,7 +82,11 @@
       <label class="cb"><input type="checkbox" id="l-local" checked><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
       <label class="cb">opacity <input type="number" id="cmalpha" value="15" min="5" max="100" step="5"> <span class="unit">%</span></label>
     </div>
-    <h3>Sensors</h3>
+    </div>
+    </section>
+    <section class="acc open" data-acc="sensors">
+    <h3 class="acc-head" role="button" tabindex="0" aria-expanded="true">Sensors</h3>
+    <div class="acc-body">
     <div class="row velodyne">
       <label class="cb"><input type="checkbox" id="l-velodyne" checked><span class="sw" data-key="velodyne" style="background:linear-gradient(90deg,#3030ff,#30ff30,#ff3030)"></span>Velodyne</label>
       <details id="velodyne-settings" class="settings"><summary title="Velodyne settings"><span class="caret"></span></summary>
@@ -79,18 +98,22 @@
         <div class="row"><label class="cb">max <input type="number" id="cloudmax" value="20000" min="1000" max="60000" step="1000"> <span class="unit">pts</span></label></div>
       </details>
     </div>
-    <div class="row">
+    <div class="row grid">
       <label class="cb"><input type="checkbox" id="l-s1" checked><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
       <label class="cb"><input type="checkbox" id="l-s2e" checked><span class="sw" data-key="s2e" style="background:#39d353"></span>S2E</label>
     </div>
+    </div>
+    </section>
     <h3>Robot</h3>
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-robot" checked> robot model (URDF)</label>
       <label class="cb"><input type="checkbox" id="l-frames"> TF frames</label>
       <label class="cb"><input type="checkbox" id="follow" checked> follow robot</label>
     </div>
-    <h3>Navigation</h3>
-    <div class="row">
+    <section class="acc open" data-acc="navigation">
+    <h3 class="acc-head" role="button" tabindex="0" aria-expanded="true">Navigation</h3>
+    <div class="acc-body">
+    <div class="row grid">
       <label class="cb"><input type="checkbox" id="l-plan" checked><span class="sw" data-key="plan" style="background:#39d353"></span>plan</label>
       <label class="cb"><input type="checkbox" id="l-localplan" checked><span class="sw" data-key="localplan" style="background:#4fd6ff"></span>local plan</label>
       <label class="cb"><input type="checkbox" id="l-goal" checked><span class="sw" data-key="goal" style="background:#ff4040"></span>goal</label>
@@ -104,6 +127,8 @@
       <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" data-key="route" style="background:#fabe17"></span>route</label>
       <select id="routes"></select>
     </div>
+    </div>
+    </section>
     <h3>Cameras</h3>
     <div class="row" id="cam-panel"></div>
     <div id="sim-panel" hidden>
@@ -566,6 +591,19 @@ async function loadRoutes() {
   await loadRoute(s.value);                                  // default (none): pick a route from the list to show it
 }
 $("#routes").onchange = () => loadRoute($("#routes").value);
+// the Scene / Sensors / Navigation sections fold on a click of their heading (Enter / Space too); folds are remembered per browser
+{ let closed = []; try { closed = JSON.parse(localStorage.getItem("map3d.closed") || "[]"); } catch (e) { /* no storage */ }
+  for (const sec of document.querySelectorAll("#side .acc")) {
+    const head = sec.querySelector(".acc-head"), key = sec.dataset.acc;
+    const set = (open) => { sec.classList.toggle("open", open); head.setAttribute("aria-expanded", String(open)); };
+    set(!closed.includes(key));
+    const toggle = () => {
+      set(!sec.classList.contains("open"));
+      closed = [...document.querySelectorAll("#side .acc:not(.open)")].map((x) => x.dataset.acc);
+      try { localStorage.setItem("map3d.closed", JSON.stringify(closed)); } catch (e) { /* ignore */ }
+    };
+    head.onclick = toggle; head.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+  } }
 // the Velodyne settings fold stays as you left it (per browser)
 { const d = $("#velodyne-settings"); try { d.open = localStorage.getItem("map3d.velodyneSettings") === "open"; } catch (e) { /* no storage */ }
   d.addEventListener("toggle", () => { try { localStorage.setItem("map3d.velodyneSettings", d.open ? "open" : "closed"); } catch (e) { /* ignore */ } }); }
