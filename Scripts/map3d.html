@@ -349,10 +349,12 @@ function tagObject(id, size, seen) {
   const grp = new THREE.Group();
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: tagTexture(id, seen), side: THREE.DoubleSide }));
   const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(size * 1.25, size * 1.25)), new THREE.LineBasicMaterial({ color: seen ? TAG_COLORS.seen : TAG_COLORS.taught, linewidth: 2 }));
-  const label = textSprite(`tag ${id}`, seen ? "#9fe3a6" : "#ffd166"); label.position.set(size * 0.9, 0, 0.05);
-  // the detector's tag frame has the printed tag's "up" along -x of the frame: turn the face 90° clockwise
-  // (seen with the tag's z toward you) so the number reads the way the paper tag does (2026-11-01)
-  mesh.rotation.z = -Math.PI / 2;
+  const label = textSprite(`tag ${id}`, seen ? "#9fe3a6" : "#ffd166"); label.position.set(0.05, -size * 0.9, 0);
+  // This detector's tag frame (measured on tag_3, 2026-11-01): X = the tag's normal, out of the face toward
+  // the camera; Y = DOWN the paper; Z = along the paper. So the face lies in the frame's Y-Z plane. Map the
+  // plane's local axes (x right, y up, z toward the viewer) onto (frame Z, frame -Y, frame X).
+  const faceRot = new THREE.Matrix4().set(0, 0, 1, 0,  0, -1, 0, 0,  1, 0, 0, 0,  0, 0, 0, 1);
+  mesh.setRotationFromMatrix(faceRot); edge.setRotationFromMatrix(faceRot);
   grp.add(mesh, edge, label);
   return { grp, mesh, edge, label, seen };
 }
