@@ -98,6 +98,7 @@
       <label class="cb"><input type="checkbox" id="l-stop" checked><span class="sw" data-key="stop" style="background:#ff4040"></span>stop polygon</label>
       <label class="cb"><input type="checkbox" id="l-slowdown" checked><span class="sw" data-key="slowdown" style="background:#ffa040"></span>slowdown polygon</label>
       <label class="cb"><input type="checkbox" id="l-particles"><span class="sw" data-key="particles" style="background:#8ab4ff"></span>AMCL particles</label>
+      <label class="cb" title="AprilTag landmarks: taught map poses (amber) and tags the camera sees right now (green)"><input type="checkbox" id="l-apriltags" checked><span class="sw" data-key="apriltags" style="background:#ffd166"></span>AprilTags</label>
     </div>
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-route" checked><span class="sw" data-key="route" style="background:#fabe17"></span>route</label>
@@ -323,6 +324,54 @@ async function loadRoute(name) {
   routePts.visible = W.length > 0;
 }
 
+// ---------------------------------------------------------------- AprilTag landmarks (/api/apriltags)
+// Each tag is a square in the map frame with the tag's id on it: taught poses (the relocalizer's
+// file) in amber, tags the detector sees right now (TF tag_<id>) in green and at their live pose.
+const tagsGroup = new THREE.Group(); scene.add(tagsGroup);
+const tagObjs = {};                                      // id -> {mesh, edge, label, seen}
+const TAG_COLORS = { taught: 0xffd166, seen: 0x39d353 };
+function tagTexture(id, seen) {
+  const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, 128, 128);
+  g.fillStyle = "#000"; g.fillRect(12, 12, 104, 104);
+  g.fillStyle = "#fff"; g.fillRect(28, 28, 72, 72);
+  g.fillStyle = seen ? "#1f8f3a" : "#000"; g.font = "bold 44px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(id), 64, 66);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+function textSprite(text, color) {
+  const c = document.createElement("canvas"); c.width = 256; c.height = 64; const g = c.getContext("2d");
+  g.font = "bold 36px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.lineWidth = 6; g.strokeStyle = "rgba(0,0,0,.8)"; g.strokeText(text, 128, 32); g.fillStyle = color; g.fillText(text, 128, 32);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true })); sp.scale.set(0.8, 0.2, 1); return sp;
+}
+function tagObject(id, size, seen) {
+  const grp = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: tagTexture(id, seen), side: THREE.DoubleSide }));
+  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(size * 1.25, size * 1.25)), new THREE.LineBasicMaterial({ color: seen ? TAG_COLORS.seen : TAG_COLORS.taught, linewidth: 2 }));
+  const label = textSprite(`tag ${id}`, seen ? "#9fe3a6" : "#ffd166"); label.position.set(0, size * 0.9, 0.05);
+  grp.add(mesh, edge, label);
+  return { grp, mesh, edge, label, seen };
+}
+async function pollTags() {
+  if (!on("#l-apriltags")) return;
+  let d; try { d = await fetch("/api/apriltags").then((r) => r.json()); } catch (e) { return; }
+  const ids = new Set();
+  const place = (id, tf, seen) => {
+    ids.add(id);
+    const size = (d.sizes && d.sizes[id]) || d.size || 0.15;
+    let o = tagObjs[id];
+    if (o && o.seen !== seen) { tagsGroup.remove(o.grp); o = null; }
+    if (!o) { o = tagObject(id, size, seen); tagObjs[id] = o; tagsGroup.add(o.grp); }
+    o.grp.position.set(tf[0], tf[1], tf[2]); o.grp.quaternion.set(tf[3], tf[4], tf[5], tf[6]);
+  };
+  for (const [id, tf] of Object.entries(d.taught || {})) place(id, tf, false);
+  for (const [id, tf] of Object.entries(d.seen || {})) place(id, tf, true);        // live pose wins
+  for (const id of Object.keys(tagObjs)) if (!ids.has(id)) { tagsGroup.remove(tagObjs[id].grp); delete tagObjs[id]; }
+  const n = Object.keys(d.taught || {}).length, m = Object.keys(d.seen || {}).length;
+  pollTags.info = `${n} taught${m ? `, ${m} in view` : ""}`;
+}
+
 // ---------------------------------------------------------------- simulated obstacles (cones)
 const cones = new THREE.Group(); scene.add(cones);
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
@@ -515,7 +564,7 @@ $("#routes").onchange = () => loadRoute($("#routes").value);
 // the Velodyne settings fold stays as you left it (per browser)
 { const d = $("#velodyne-settings"); try { d.open = localStorage.getItem("map3d.velodyneSettings") === "open"; } catch (e) { /* no storage */ }
   d.addEventListener("toggle", () => { try { localStorage.setItem("map3d.velodyneSettings", d.open ? "open" : "closed"); } catch (e) { /* ignore */ } }); }
-for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-footprint", "#l-stop", "#l-slowdown", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
+for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-footprint", "#l-stop", "#l-slowdown", "#l-particles", "#l-apriltags", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
 $("#l-invert").onchange = setMapTexture;
 $("#ptsize").onchange = () => { for (const p of Object.values(clouds)) p.material.size = parseFloat($("#ptsize").value) || 2; };
 $("#cam-reset").onclick = () => setView(pose ? robotPos.clone() : new THREE.Vector3(MAP ? MAP.origin[0] + MAP.width * MAP.resolution / 2 : 0, MAP ? MAP.origin[1] + MAP.height * MAP.resolution / 2 : 0, 0));
@@ -527,6 +576,7 @@ function applyVisibility() {
   if (robotModel) robotModel.visible = on("#l-robot");
   robotRing.visible = robotHeading.visible = !(robotModel && on("#l-robot"));
   frameAxes.visible = on("#l-frames");
+  tagsGroup.visible = on("#l-apriltags"); if (tagsGroup.visible) pollTags();
   planLine.visible = planLine.visible && on("#l-plan"); localPlanLine.visible = localPlanLine.visible && on("#l-localplan");
   goalArrow.visible = goalArrow.visible && on("#l-goal");
   for (const [n, l] of Object.entries(polyLines)) { l.visible = !!l.userData.has && polyOn(n); if (polyFills[n]) polyFills[n].visible = !!l.userData.has && !!l.userData.triggered && polyOn(n); }
@@ -543,6 +593,7 @@ function applyColor(k, hex) {
   else if (k === "goal") goalArrow.setColor(c);
   else if (k === "footprint" || k === "stop" || k === "slowdown") { POLY_COLORS[k] = c.getHex(); if (polyLines[k]) polyLines[k].material.color.copy(c); if (polyFills[k]) polyFills[k].material.color.copy(c); }
   else if (k === "particles") particles.material.color.copy(c);
+  else if (k === "apriltags") { TAG_COLORS.taught = c.getHex(); for (const o of Object.values(tagObjs)) if (!o.seen) o.edge.material.color.copy(c); }
   else if (k === "route") routeLine.material.color.copy(c);
   else if (k === "cm_global" || k === "cm_local") { const n = k.slice(3); CM_COLORS[n] = hex; if (costmaps[n]) costmaps[n].stamp = null; }
 }
@@ -574,7 +625,7 @@ function animate() {
   mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setMapTexture();
   setView(new THREE.Vector3(MAP.origin[0] + MAP.width * MAP.resolution / 2, MAP.origin[1] + MAP.height * MAP.resolution / 2, 0), 28, 30, 122);
   loadRoutes().catch(() => {});
-  loop(pollTf, 66); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
+  loop(pollTf, 66); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000); loop(pollTags, 1000);
   applyVisibility(); animate();
   if (window.initCams) initCams({ view: $("#view"), panel: $("#cam-panel"), top: 44 });   // below the tool buttons
   if (window.initSwatches) initSwatches({ page: "3d", apply: applyColor });

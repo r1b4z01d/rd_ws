@@ -191,6 +191,65 @@ def save_landmarks(items: list) -> None:
     tmp.replace(p)
 
 
+# --------------------------------------------------------------------------- AprilTags (3D page layer)
+# The relocalizer (src/robot_disco/scripts/apriltag_relocalizer.py) TEACHES map-frame tag poses into
+# config/apriltag_landmark_poses.yaml (the installed copy under install/.../share is the one it writes);
+# the detector names a visible tag's TF frame tag_<id> (config/apriltag_landmarks.yaml), which the
+# frame sweep above already expresses in the map frame. /api/apriltags = both, for the 3D page.
+_TAG_FRAME = re.compile(r"^tag(?:36h11)?[_:](\d+)$")
+_tags_cache: dict = {"path": None, "mtime": None, "taught": {}, "sizes": {}, "default_size": 0.15}
+
+
+def apriltag_files() -> tuple:
+    """(poses yaml the relocalizer writes, detector config with the tag sizes)."""
+    if getattr(ARGS, "apriltags_file", None):
+        return Path(ARGS.apriltags_file), None
+    share = None
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = Path(get_package_share_directory("robot_disco"))
+    except Exception:  # noqa: BLE001 — no ROS (Mac / sim): fall back to the source tree
+        pass
+    cfg = (share / "config") if share and (share / "config").is_dir() else HERE.parent / "src" / "robot_disco" / "config"
+    return cfg / "apriltag_landmark_poses.yaml", cfg / "apriltag_landmarks.yaml"
+
+
+def apriltags() -> dict:
+    poses_file, det_file = apriltag_files()
+    c = _tags_cache
+    try:
+        m = poses_file.stat().st_mtime
+    except OSError:
+        m = None
+    if c["path"] != str(poses_file) or c["mtime"] != m:
+        taught = {}
+        if m is not None:
+            try:
+                data = yaml.safe_load(poses_file.read_text()) or {}
+                for tid, lm in (data.get("landmarks") or {}).items():
+                    p_, o_ = lm.get("position") or {}, lm.get("orientation") or {}
+                    taught[str(int(tid))] = [round(float(p_.get("x", 0)), 4), round(float(p_.get("y", 0)), 4), round(float(p_.get("z", 0)), 4),
+                                             round(float(o_.get("x", 0)), 5), round(float(o_.get("y", 0)), 5), round(float(o_.get("z", 0)), 5), round(float(o_.get("w", 1)), 5)]
+            except Exception as e:  # noqa: BLE001
+                print(f"[route_editor] apriltag poses unreadable: {e}", flush=True)
+        sizes, default = {}, 0.15
+        if det_file and det_file.exists():
+            try:
+                det = yaml.safe_load(det_file.read_text()) or {}
+                default = float(det.get("size", default))
+                sizes = {str(int(i)): float(sz) for i, sz in zip(det.get("tag_ids") or [], det.get("tag_sizes") or [])}
+            except Exception:  # noqa: BLE001
+                pass
+        c.update({"path": str(poses_file), "mtime": m, "taught": taught, "sizes": sizes, "default_size": default})
+    seen = {}
+    for name, tf in STATE["frames"].items():
+        mt = _TAG_FRAME.match(name)
+        if mt:
+            seen[str(int(mt.group(1)))] = tf
+    return {"taught": c["taught"], "seen": seen, "sizes": c["sizes"], "size": c["default_size"],
+            "file": c["path"], "t": time.time()}
+
+
 # A landmark's TASKS tie a policy run (an eval, VLA/scripts/vla_action.py) to the place it is done at:
 # "pick up tigger" = drive to the right bookshelf, then run tigger_1_merged_smolvla_1 with the task string
 # "Grab and hold tigger". The voice assistant (rd_ws/src/robot_voice) reads landmarks.yaml for the phrases it
@@ -1079,6 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(404, b"no such image", "text/plain")
             elif u.path == "/api/obstacles":
                 self._json({"obstacles": STATE["nav"].get("obstacles") or [], "sim": STATE["sim"]})
+            elif u.path == "/api/apriltags":
+                self._json(apriltags())
             elif u.path == "/api/nav":
                 nav = dict(STATE["nav"])
                 if q.get("particles"):
@@ -1331,6 +1392,8 @@ def main() -> int:
     ap.add_argument("--raw-scans", action="store_true", help="draw the lidar drivers' raw scans instead of the filtered ones")
     ap.add_argument("--scan-topics", default=None, metavar="name=topic,...",
                     help="override the scan topics drawn on the map (default: the filtered RPLiDAR scans)")
+    ap.add_argument("--apriltags-file", default=None, metavar="YAML",
+                    help="taught AprilTag map poses (default: the relocalizer's config/apriltag_landmark_poses.yaml)")
     ap.add_argument("--landmarks-dir", type=Path, default=None, metavar="DIR",
                     help="where landmarks.yaml and its photos live (default: Scripts/landmarks, next to the routes)")
     ARGS = ap.parse_args()
