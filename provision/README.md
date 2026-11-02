@@ -1,19 +1,22 @@
 # Provisioning a Robot Disco robot PC
 
-Everything needed to turn a fresh **Ubuntu 22.04** install into the robot PC ("RD", `rd@192.168.11.80`,
-ROS 2 Humble). The live robot is *not* git-synced and carries state that is not in this repo, so there
-are two scripts:
+Everything needed to turn a fresh box into the robot PC ("RD", `rd@192.168.11.80`, ROS 2 Humble on
+Ubuntu 22.04). Since 2026-10-10 the robot PC is a **Jetson AGX Orin** (JetPack 6.x), so the entrypoint is
+`jetson/provision_jetson.sh`; it sources `provision.sh`, the shared phased installer that also provisions
+an x86 box. The live robot is *not* git-synced and carries state that is not in this repo, so there is a
+snapshot script as well:
 
 | Script | Runs on | Purpose |
 |---|---|---|
 | `capture_rd_state.sh` | your workstation | Snapshot a working robot PC: installed packages, local edits, maps, learned faces, TTS cache, foxglove image. Doubles as a backup. |
-| `provision.sh` | the new machine | Idempotent, phased installer. Optionally restores from a snapshot. |
-| `jetson/provision_jetson.sh` | a Jetson Orin | Same phases for JetPack 6.x plus CUDA torch and the local VLA inference server. |
-| `gpu/provision_gpu.sh` | the GPU box (Ubuntu 24.04, RTX 4090) | Training box + VLA web manager: venv, supervisor units, data from RD, optional Wi-Fi/desktop apps. See `gpu/README.md`. |
+| `jetson/provision_jetson.sh` | the robot PC (Jetson Orin) | **The normal path.** Sources `provision.sh`, adds the JetPack phases (`jetson`, `data`, CUDA torch in `vla`, `infer`, `vlamove`, `vlacheck`). See *Jetson Orin as the robot PC* below. |
+| `provision.sh` | an x86 Ubuntu 22.04 box | The shared phased installer (idempotent, re-runnable, optionally restores from a snapshot); runs alone on an Intel box. |
+| `deploy_to_rd.sh` | your workstation | Day-to-day push of the face, voice, route-runner and VLA code to a provisioned robot, then build + restart. See *Pushing changes to a provisioned robot* below. |
+| `gpu/provision_gpu.sh` | the GPU box (Ubuntu 24.04, RTX 4090) | Training box + VLA web manager + the voice assistant's local LLM (Ollama under supervisor): venv, supervisor units, data from RD, optional Wi-Fi/desktop apps. See `gpu/README.md`. |
 
 Manifests the installer reads: `apt-packages.txt`, `ros-packages.txt`, `pip-robot-face.txt`,
 `pip-robot-face-tts.txt`, `pip-vla.txt`, `udev/99-robot-disco.rules`, `netplan/01-robot-disco.yaml`,
-`start_face.sh`, `setup_kokoro.sh` (Kokoro-82M voice; offline wheel/model instructions in its header). The supervisor units come from `../services/`, the VLA units from `VLA/services/rd/`.
+`start_face.sh`, `setup_kokoro.sh` (Kokoro-82M voice; offline wheel/model instructions in its header), `setup_faceid.sh` (ArcFace face recognition venv), `setup_voice.sh` (voice assistant: faster-whisper venv + anthropic SDK), `pulse/default.pa` (the PulseAudio output policy), `../src/robot_face/motions/wave.json` (the arm's wave, replayed on the UR5e). The supervisor units come from `../services/` (including `ollama.conf`, the local language model), the VLA units from `VLA/services/rd/`.
 
 ## 0. Before the old machine dies: take a snapshot
 
@@ -22,10 +25,18 @@ provision/capture_rd_state.sh            # -> provision/snapshot-YYYYMMDD/  (nee
 ```
 
 Do this now, while the current RD still works. It is the only copy of the robot's uncommitted edits
-(`rd_ws.local.diff`), the `zone_one` map, `people.json`, the Coqui voice cache and the foxglove image.
+(`rd_ws.local.diff`), the `zone_one` map, both face galleries (`people.json`, `people.arcface.json`) with
+the Folks thumbnails, the arm gesture recordings, `~/Music` (skip with `NO_MUSIC=1`), `voice.env`, the Coqui
+voice cache, the pip freezes (system python and `~/rd_ws/VLA/.venv`), `inventory/` (apt/ros package lists,
+the installed supervisor confs, `pulse-default.pa`, the robot's `run.sh`, `ollama-models.txt`, `start_face.sh`)
+and the foxglove image (skip with `NO_DOCKER=1`). Arguments: `capture_rd_state.sh [HOST] [OUT_DIR]`
+(defaults `RD` and `provision/snapshot-YYYYMMDD`).
 Commit anything from `rd_ws.local.diff` you want to keep; the rest can be re-applied with `git apply`.
 
 ## 1. Install Ubuntu 22.04 Desktop
+
+On the Jetson this step is the SDK Manager flash (JetPack 6.x + Jetson runtime components, user `rd`); the
+rest applies to both.
 
 - Create user **`rd`** (the supervisor units, services and paths all assume `/home/rd`).
 - Hostname `robotdisco`. Desktop (GNOME) is required: the face is an OpenGL window on the robot's screen.
@@ -50,39 +61,55 @@ SNAPSHOT=~/snapshot-20261008 ~/rd_ws/provision/provision.sh all
 cd ~/rd_ws && git apply ~/snapshot-20261008/rd_ws.local.diff   # the robot-only edits, if wanted
 ```
 
-`all` runs: `preflight base ros groups udev sysctl workspace face services display foxglove`.
-Each phase can be run alone and re-run safely, e.g. `provision.sh workspace` after fixing a build error.
+`all` runs: `preflight base ros groups udev sysctl workspace face audio services llm display foxglove`.
+Each phase can be run alone and re-run safely, e.g. `provision.sh workspace` after fixing a build error;
+`preflight` runs before any named phase.
 
 | Phase | What it does |
 |---|---|
+| `preflight` | must run as `rd` with sudo; warns when the OS is not Ubuntu 22.04 or (x86 script) not amd64; writes the apt/pip/git proxy config when `PROXY` is set |
 | `base` | `apt-packages.txt`; enables ssh, supervisor, docker; hostname; NTP; `/etc/hosts` entries for ur5e/amazinghand/gpu; `AUTHORIZED_KEY` |
-| `ros` | ROS 2 apt repo, `ros-packages.txt`, rosdep, sources Humble + the workspace in `~/.bashrc`, realsense udev rules |
+| `ros` | ROS 2 apt repo, `ros-packages.txt`, rosdep; appends to `~/.bashrc`: source Humble + the workspace, `FASTRTPS_DEFAULT_PROFILES_FILE=~/rd_ws/services/fastdds_no_shm.xml` (UDP-only DDS, see *DDS transport*) and `ROS_DOMAIN_ID=0`; realsense udev rules |
 | `groups` | adds `rd` to dialout, video, input, plugdev, audio, docker, render |
 | `udev` | `udev/99-robot-disco.rules` (SpaceMouse hidraw, RealSense, webcams, gamepads) |
 | `sysctl` | UDP receive buffers for the multicast camera stream (same file VLA's installer writes) |
-| `workspace` | clones/updates `~/rd_ws`, inits the `src/` submodules over https, `rosdep install`, `colcon build --symlink-install` |
-| `face` | `pip-robot-face.txt` into the system python (`--user`); installs Kokoro-82M TTS into its own venv via `setup_kokoro.sh` (`WITH_KOKORO=0` to skip, `KOKORO_WHEELS=dir` for offline); `WITH_TTS=1` adds Coqui; restores Kokoro models, Coqui cache + `people.json` from the snapshot |
-| `services` | supervisor web UI on `:9999`, `Scripts/install_services.sh` (supervisor units) and `~/start_face.sh` |
+| `workspace` | clones/updates `~/rd_ws` (`RD_WS_REPO`, `RD_WS_REF`), inits the `src/` submodules over https one at a time (a dead upstream is skipped; `SKIP_SUBMODULES=1` leaves an rsynced `src/` alone), applies `patches/<submodule>-*.patch` idempotently, restores `maps/` from the snapshot, `rosdep install`, `colcon build --symlink-install`. The `VLA/` submodule is not touched here (phase `vla`) |
+| `face` | `pip-robot-face.txt` into the system python (`--user`); ArcFace face-ID venv via `setup_faceid.sh` (`WITH_FACEID=0` to skip); voice assistant venv + anthropic SDK via `setup_voice.sh` (`WITH_VOICE=0`, `WHISPER_MODEL=`); Kokoro-82M TTS via `setup_kokoro.sh` (`WITH_KOKORO=0`, `KOKORO_WHEELS=dir` for offline); `WITH_TTS=1` adds Coqui; installs the repo's arm gestures (`src/robot_face/motions/*.json` → `~/.robot_face/motions/`); restores Kokoro models, Coqui cache, both `people*.json` galleries, `faces/`, `motions/`, `~/Music` and `voice.env` from the snapshot (existing files win) |
+| `audio` | `pulse/default.pa` → `~/.config/pulse/default.pa` (no auto-switch to a newly plugged device, no suspend-on-idle, default sink = `AUDIO_SINK`, the dock's C-Media adapter), unmutes the sink, `alsactl store` so the adapter does not come back muted at boot (see *Audio* below) |
+| `services` | supervisor web UI / XML-RPC on `:9999` (no auth, trusted subnet), `Scripts/install_services.sh` (every `services/*.conf`, `ollama.conf` included, so the `ollama` unit exists before phase `llm` fills it) and `~/start_face.sh` |
+| `llm` | the voice assistant's fallback language model on the robot: Ollama (installed if missing; the JetPack 6 build on the Orin), its installer's `ollama.service` disabled, **supervisor unit `ollama`** (`services/ollama.conf`: loopback `:11434`, user `ollama`, 30 min keep-alive), `ollama pull $OLLAMA_MODEL` (qwen2.5:7b, 4.7 GB, needs the uplink). `WITH_LLM=0` skips it. The GPU box's copy (`gpu/provision_gpu.sh llm`) is what the robot asks first |
 | `display` | GDM autologin for `rd`, no screen blanking or lock |
 | `foxglove` | `docker load` from `FOXGLOVE_IMAGE_TAR` or the snapshot, else builds `foxglove_studio/Dockerfile` (slow, needs internet) |
-| `vla` | *(not in `all`)* `~/VLA/.venv` from the snapshot freeze or `pip-vla.txt`, `run.sh`, `install_services.sh rd` (camera service + ROS bridge, and the manual-start `vla_teleop` / `vla_eval` units with their `~/VLA/config/*.env` argument files) |
-| `network` | *(not in `all`)* static `192.168.11.80/24`, no gateway, from `netplan/01-robot-disco.yaml` |
+| `vla` | *(not in `all`)* `~/rd_ws/VLA/.venv` from the snapshot freeze or `pip-vla.txt`, `run.sh`, `install_services.sh rd` (camera service + ROS bridge, and the manual-start `vla_teleop` / `vla_eval` units with their `~/rd_ws/VLA/config/*.env` argument files) |
+| `network` | *(not in `all`)* static `192.168.11.80/24` on `NET_IFACE` (auto-detected). netplan boxes: `netplan/01-robot-disco.yaml`, no gateway. A NetworkManager-managed interface (the Jetson desktop) is switched with `nmcli` instead, 2 s after the command returns (the SSH session drops): address, gateway `NET_GATEWAY` (192.168.11.1) and DNS `NET_DNS` (8.8.8.8) |
 
-Environment knobs are listed at the top of `provision.sh` (`RD_USER`, `RD_WS_REF`, `SNAPSHOT`,
-`WITH_TTS`, `FOXGLOVE_IMAGE_TAR`, `PROXY`, `AUTHORIZED_KEY`, `NET_IFACE`, `HOSTNAME_NEW`).
+Environment knobs are listed at the top of `provision.sh`: `RD_USER`, `HOSTNAME_NEW`, `RD_WS_REPO`,
+`RD_WS_REF`, `SNAPSHOT`, `SKIP_SUBMODULES`, `WITH_TTS`, `WITH_KOKORO` (+ `KOKORO_WHEELS` for an offline
+install), `WITH_FACEID`, `WITH_VOICE` (+ `WHISPER_MODEL`, default `base.en`), `WITH_LLM` (+ `OLLAMA_MODEL`),
+`AUDIO_SINK`, `FOXGLOVE_IMAGE_TAR`, `PROXY`, `AUTHORIZED_KEY`, `NET_IFACE`, `NET_GATEWAY`, `NET_DNS`,
+`NETPLAN_RENDERER`. The Jetson script adds `JETSON_TORCH`, `JETSON_TORCHVISION`, `JETSON_PIP_INDEX`,
+`CUSPARSELT_VERSION`, `SERVE_CKPT`, `NVPMODEL`, `DATA_LABEL`, `DATA_MOUNT`.
 
 ## 3. VLA (optional, only if this box also records/evaluates with the arm)
 
-The VLA tree is not a git checkout on the robot; it is pushed from the workstation (see
-`VLA/wiki/Sync-and-Layout.md`). Then build the venv and install the camera services:
+VLA is the `rd_ws/VLA` git submodule (`.gitmodules`, https://github.com/r1b4z01d/VLA; a `COLCON_IGNORE` in
+it keeps colcon out). The robot has no internet, so `git submodule update` never runs there: the tree is
+pushed from the workstation into the same place, `~/rd_ws/VLA`, and the robot's own `.venv`, `outputs/`,
+`log/` and `config/*.env` live inside it untouched (the push never uses `--delete`). Then build the venv and
+install the camera services:
 
 ```bash
-# workstation, from the VLA repo
-tar czf - --exclude=__pycache__ --exclude=.venv --exclude=outputs ur5e_lerobot scripts services webui \
-  | ssh rd@<new-rd> 'mkdir -p ~/VLA && tar xzf - -C ~/VLA'
+# workstation, from rd_ws (needs the ssh host RD)
+provision/deploy_to_rd.sh --vla
+# or by hand, from rd_ws/VLA
+tar czf - --exclude=__pycache__ --exclude=.venv --exclude=outputs ur5e_lerobot scripts services webui assets \
+  | ssh rd@<new-rd> 'mkdir -p ~/rd_ws/VLA && tar xzf - -C ~/rd_ws/VLA'
 # new robot PC
 SNAPSHOT=~/snapshot-20261008 ~/rd_ws/provision/provision.sh vla
 ```
+
+A robot provisioned before 2026-11-02 has the old layout, `~/VLA` beside `~/rd_ws`:
+`jetson/provision_jetson.sh vlamove` moves it (Jetson table below) and `vlacheck` audits for leftovers.
 
 ## 4. Move onto the robot subnet (last)
 
@@ -97,38 +124,59 @@ From the workstation, `ssh RD` should now work (the `RD` host entry in `~/.ssh/c
 ## 5. Verify
 
 ```bash
-sudo supervisorctl status            # foxglove bridge/studio + collision monitor should be RUNNING
+sudo supervisorctl status            # route editor, collision monitor and ollama RUNNING; foxglove bridge/studio are manual-start
+sudo supervisorctl status ollama && curl -s 127.0.0.1:11434/api/tags | head -c 200   # the local LLM answers
 ls -l /dev/ttyACM0 /dev/ttyUSB0      # RoboClaw, RPLiDAR (dialout)
 rs-enumerate-devices | head          # RealSense seen
-~/start_face.sh                      # face window appears on the robot's screen
-sudo supervisorctl start robot_disco && ros2 topic list | head
+sudo supervisorctl start robot_face  # the face appears on the robot's screen (~/start_face.sh is the manual fallback)
+sudo supervisorctl start robot_disco robot_disco_localization robot_disco_navigation && ros2 topic list | head
 ```
 
-Open Foxglove at `http://192.168.11.80:8080` and check `/scan`, `/odom`, `/camera/camera/color/image_raw`.
+Then open the robot's own pages: `http://192.168.11.80:8092/?view=map` (the robot, both lidar scans and
+the costmaps on the map) and `http://192.168.11.80:8092/3d` (the 3D view with the Velodyne cloud and the
+URDF). Foxglove (`:8080`) is manual-start now and only needed for topics those pages do not draw.
+
+## Pushing changes to a provisioned robot (`deploy_to_rd.sh`)
+
+The robot is not git-synced: `deploy_to_rd.sh` is the way code gets there after provisioning (needs the
+ssh host `RD`, i.e. the workstation on the robot network).
+
+| Call | What it does |
+|---|---|
+| `provision/deploy_to_rd.sh` | rsyncs `src/robot_face/`, `src/robot_voice/`, `Scripts/path.py`, `src/robot_disco/scripts/ur_joint_state_publisher.py`, the face and voice units, the provision scripts and `README.md`; on RD `colcon build --packages-select robot_face robot_voice --symlink-install`, reinstalls the two units, restarts `robot_face`, starts or restarts `robot_voice`, waits 45 s and tails both logs; warns when `ANTHROPIC_API_KEY` is empty in `~/.robot_face/voice.env` |
+| `… --setup` | additionally runs `setup_faceid.sh`, `setup_voice.sh base.en` and (if missing) `setup_kokoro.sh` on RD first (the first deploy on a fresh box) |
+| `… --vla` | additionally pushes the VLA submodule tree (`rd_ws/VLA/` → `RD:~/rd_ws/VLA/`, no `--delete`; the robot's `.venv`, `outputs/`, `log/` and `config/*.env` are left alone) and runs `VLA/scripts/install_services.sh rd`, which re-reads `services/rd/*.conf` and restarts a running `vla_cameras` / `vla_camera_ros_bridge` only if its unit file changed. Refused while the robot still has the old `~/VLA` layout (run `vlamove` first) |
+
+Everything else in `Scripts/` (the route editor, `record_path.py`, the YAML routes) and the other
+`src/` packages still travel by hand (`rsync -a Scripts/ RD:rd_ws/Scripts/` and a `colcon build` for a
+ROS package).
 
 ## Jetson Orin as the robot PC (`jetson/`)
 
-The Intel box is being replaced by a **Jetson Orin dev kit** so the VLA inference server runs on the
-robot's own GPU. `jetson/provision_jetson.sh` is a separate entrypoint that sources `provision.sh` and
-overrides only what differs on JetPack 6.x (Ubuntu 22.04, aarch64):
+Since 2026-10-10 the robot PC is a **Jetson AGX Orin dev kit** (64 GB), so the VLA inference server
+runs on the robot's own GPU. `jetson/provision_jetson.sh` is the entrypoint: it sources `provision.sh` and
+overrides only what differs on JetPack 6.x (Ubuntu 22.04, aarch64); `audio` and `llm` are inherited
+unchanged. `all` = `preflight base jetson data ros groups udev sysctl workspace face audio services llm display foxglove`:
 
 | Phase | Jetson difference |
 |---|---|
 | `preflight` | requires aarch64, `/etc/nv_tegra_release`, Ubuntu 22.04; prints L4T + CUDA versions |
-| `base` | adds `jetson/apt-packages-jetson.txt` (boost/cmake/openblas for the source builds, `nvidia-jetpack`) |
-| `jetson` *(new)* | `nvpmodel -m 0` (MAXN), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop` |
-| `data` *(new)* | optional second drive (the 512 GB NVMe, ext4 label `data`): fstab `nofail` + mount at `/mnt/data`, then `~/VLA`, `~/rd_ws`, `~/.cache/huggingface` and `~/.cache/robot_descriptions` become **symlinks** onto it (an existing tree is rsync-copied, checksum-verified and removed; refused while something runs from it), plus a `supervisor.service.d` drop-in so the units wait for the mount. No drive → no-op. |
-| `vla` | cuSPARSELt, then **torch 2.8.0 / torchvision 0.23.0 from `https://pypi.jetson-ai-lab.io/jp6/cu126`** (CUDA builds; PyPI torch has no Jetson CUDA), then `jetson/pip-vla-jetson.txt` = `lerobot[smolvla]==0.4.4` + the rest. `ur_rtde` and `moderngl` compile from source (no arm64 wheels). Asserts `torch.cuda.is_available()`. |
-| `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd`; the same install drops `vla_teleop` / `vla_eval` (manual start: `sudo supervisorctl start vla_teleop`, arguments in `~/VLA/config/teleop.env` / `eval.env`) |
+| `base` | adds `jetson/apt-packages-jetson.txt` (boost, cmake, ninja, pkg-config, openblas, python3-dev for the source builds). Deliberately **not** `nvidia-jetpack`: the flash already has CUDA 12.6, cuDNN 9 and cuBLAS, and the metapackage would add several GB to the 64 GB eMMC |
+| `jetson` *(new)* | power mode `NVPMODEL` (0 = MAXN) as the boot default in `/etc/nvpmodel.conf` plus `/var/lib/nvpmodel/status` (nvpmodel restores the last mode from there), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop`, and `xpad` in `/etc/modules-load.d/xpad.conf` for the gamepad receiver |
+| `data` *(new)* | optional second drive (the 512 GB NVMe, ext4 label `data`): fstab `nofail` + mount at `/mnt/data`, then `~/rd_ws` (VLA inside it), `~/.cache/huggingface` and `~/.cache/robot_descriptions` become **symlinks** onto it (an existing tree is rsync-copied, checksum-verified and removed; refused while something runs from it), plus a `supervisor.service.d` drop-in so the units wait for the mount. No drive → no-op. |
+| `vla` | cuSPARSELt (`CUSPARSELT_VERSION`, 0.7.1.0), then **torch 2.8.0 / torchvision 0.23.0 from `https://pypi.jetson-ai-lab.io/jp6/cu126`** (`JETSON_TORCH`, `JETSON_TORCHVISION`, `JETSON_PIP_INDEX`) (CUDA builds; PyPI torch has no Jetson CUDA), then `jetson/pip-vla-jetson.txt` = `lerobot[smolvla]==0.4.4` + the rest. `ur_rtde` and `moderngl` compile from source (no arm64 wheels). Asserts `torch.cuda.is_available()`. |
+| `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd`; the same install drops `vla_teleop` / `vla_eval` (manual start: `sudo supervisorctl start vla_teleop`, arguments in `~/rd_ws/VLA/config/teleop.env` / `eval.env`) |
+| `vlamove` *(new)* | one-time, for a robot provisioned with the old layout (`~/VLA` beside `~/rd_ws`): stops the `vla_*` units, renames `/mnt/data/VLA` to `/mnt/data/rd_ws/VLA` (same filesystem: the 8 GB of outputs stay put), removes `~/VLA` (no compatibility link), patches the venv's absolute shebangs in place (no internet to rebuild it), makes `outputs/serve_ckpt` relative, reinstalls the units from the rewritten `services/rd/*.conf` (push the tree first; refused while a conf still says the old path) and restarts `robot_voice` / `robot_face` / the route editor. Idempotent. Rollback: `sudo mv -T /mnt/data/rd_ws/VLA /mnt/data/VLA && ln -s /mnt/data/VLA ~/VLA`, reverse the sed on `.venv/bin/*`, `sudo cp /etc/supervisor/conf.d.pre-vlamove/vla_*.conf /etc/supervisor/conf.d/` + `reread`/`update` |
+| `vlacheck` *(new)* | prints everything on the box that still names `~/VLA` / `/home/rd/VLA` (installed units, the venv, both trees, `~/.bashrc`, crontab); nothing printed = clean |
 | `foxglove` | always an arm64 build; refuses to trust an x86 tarball |
-| `network` | netplan renderer `NetworkManager` (JetPack desktop default) |
+| `network` | the Jetson desktop runs NetworkManager, so the address is set with `nmcli` (`NET_GATEWAY`, `NET_DNS`); `NETPLAN_RENDERER` defaults to `NetworkManager` for the netplan fallback |
 
 ```bash
 # flash with SDK Manager: JetPack 6.x + Jetson runtime components, user rd
 git clone https://github.com/r1b4z01d/rd_ws.git ~/rd_ws
 ~/rd_ws/provision/jetson/provision_jetson.sh all        # preflight base jetson data ros ... foxglove
 sudo reboot
-# copy ~/VLA over (section 3), then
+# push the VLA tree (section 3: deploy_to_rd.sh --vla from the workstation), then
 SNAPSHOT=~/snapshot-20261008 ~/rd_ws/provision/jetson/provision_jetson.sh vla infer
 ~/rd_ws/provision/jetson/provision_jetson.sh network
 ```
@@ -137,10 +185,10 @@ Driving with the local server (same split as before, just over loopback, so `--p
 `--n-action-steps` keep living in the unit file):
 
 ```bash
-rsync -a gpu:VLA/outputs/train/<run>/checkpoints/last/ ~/VLA/outputs/train/<run>/checkpoints/last/
-ln -sfn ~/VLA/outputs/train/<run>/checkpoints/last/pretrained_model ~/VLA/outputs/serve_ckpt
+rsync -a gpu:VLA/outputs/train/<run>/checkpoints/last/ ~/rd_ws/VLA/outputs/train/<run>/checkpoints/last/
+ln -sfn ~/rd_ws/VLA/outputs/train/<run>/checkpoints/last/pretrained_model ~/rd_ws/VLA/outputs/serve_ckpt
 sudo supervisorctl start vla_infer_server
-~/VLA/run.sh scripts/eval_hw.py --remote 127.0.0.1:8777 --cameras udp --fps 12 --video
+~/rd_ws/VLA/run.sh scripts/eval_hw.py --remote 127.0.0.1:8777 --cameras udp --fps 12 --video
 ```
 
 Jetson-specific caveats:
@@ -162,6 +210,16 @@ run needed are now in the scripts:
 - ROS setup files trip `set -u`; the installer relaxes it around `source`.
 - `AprilTag_Detection`'s upstream repo is gone; submodules are now fetched one by one and a dead one
   is skipped (it is a demo package, nothing launches it).
+- **Two OpenCVs in one process (2026-11-01).** JetPack's `libopencv-dev` is NVIDIA's 4.8.0, but the
+  apt `ros-humble-cv-bridge` and `image_geometry` were built against Ubuntu's 4.5.4 (`libopencv-core4.5d`
+  stays installed beside it). A C++ node that uses cv_bridge and is built in the workspace therefore
+  links OpenCV 4.8 directly and 4.5 through cv_bridge, and the `cv::Mat` cv_bridge returns aborts the
+  process: `OpenCV(4.8.0) ... Assertion failed s >= 0 in function 'setSize'` — that killed the
+  `apriltag_ros` component container on its first camera frame. `patches/apriltag_ros-single-opencv.patch`
+  drops cv_bridge/image_geometry from that node (own mono8 conversion, intrinsics read from
+  `CameraInfo`); `provision.sh workspace` applies every `patches/<submodule>-*.patch` idempotently.
+  Python nodes are unaffected (cv_bridge's Python path goes through NumPy). `ldd <lib> | grep opencv`
+  showing both `.so.408` and `.so.4.5d` is the tell.
 - Kokoro TTS: onnxruntime ≥ 1.20 aborts on the Orin (cpuinfo assertion); `setup_kokoro.sh` pins
   1.18.1 on aarch64.
 - NVIDIA's torch wheel is built against NumPy 1.x, but lerobot's rerun-sdk declares numpy 2, so the
@@ -228,6 +286,25 @@ apt config again. The docker daemon does **not** use it, so bring the foxglove i
 (from the snapshot, or `docker build -t robotdisco/foxglove foxglove_studio/ && docker save ...` on a
 machine with internet) and pass `FOXGLOVE_IMAGE_TAR=`.
 
+## Audio
+
+Speaker: the dock's **C-Media USB audio adapter** (PulseAudio sink `alsa_output.usb-C-Media_Electronics_Inc._USB_Audio_Device-00.analog-stereo`);
+microphone: the **TONOR G11** (robot_voice's ears pick it by name and re-open it when it is power-cycled).
+No Bluetooth. Three ways the robot went silent, all handled by `provision.sh audio` and the nodes:
+
+- **Auto-switch**: stock PulseAudio loads `module-switch-on-connect`, so plugging any USB audio device made
+  it the default output. `pulse/default.pa` unloads it (and `module-suspend-on-idle`, which clipped the
+  first syllable of every sentence).
+- **Boot race**: the adapter enumerates after PulseAudio starts, so `set-default-sink` in `default.pa`
+  can miss it and `module-default-device-restore` keeps the onboard jack. The face node's `SinkWatchdog`
+  (`audio_sink: C-Media`) re-asserts the default every 5 s, and every player the nodes spawn (`aplay`,
+  `ffplay`, the chime) is pinned with `PULSE_SINK`, so sound lands on the adapter either way.
+- **Muted at boot** (2026-10-31): once the adapter's hardware mute had been set, `/var/lib/alsa/asound.state`
+  held it and udev's `alsactl restore` re-muted it at every boot. The phase unmutes and runs `alsactl store`.
+
+Volume is the sink's volume (`pactl set-sink-volume`, or "Robot Disco, volume 50 percent"); music is a
+separate sink input that the voice node ducks to `music_duck` while it listens and speaks.
+
 ## DDS transport
 
 Every ROS unit (and rd's shell) sets `FASTRTPS_DEFAULT_PROFILES_FILE=~/rd_ws/services/fastdds_no_shm.xml`:
@@ -288,8 +365,7 @@ at `/mnt/data` and `provision_jetson.sh data` keeps the big trees there behind s
 
 | in the home | on the drive |
 |---|---|
-| `~/VLA` | `/mnt/data/VLA` |
-| `~/rd_ws` | `/mnt/data/rd_ws` |
+| `~/rd_ws` (VLA inside it, as `rd_ws/VLA`) | `/mnt/data/rd_ws` |
 | `~/.cache/huggingface` (base VLM, LeRobot's Arrow copies) | `/mnt/data/cache/huggingface` |
 | `~/.cache/robot_descriptions` (robot meshes) | `/mnt/data/cache/robot_descriptions` |
 
@@ -310,10 +386,17 @@ with no internet needed on the robot:
 | URL | what |
 |---|---|
 | `http://192.168.11.80:8092/` | route editor: map + 1 m grid, live robot pose, click/drag waypoints, pause + post_actions per waypoint, undo, check / centre / densify, save for `path.py` |
-| `…:8092/?view=map` | 2D map view: filtered RPLiDAR scans, Velodyne top-down, global/local costmap overlays (the local one placed through map→odom) |
+| `…:8092/?view=map` | 2D map view: filtered RPLiDAR scans, Velodyne top-down, global/local costmap overlays (the local one placed through map→odom), legend; tool bar **Pan / Nav Goal / Initial Pose** (click, drag for the heading, release publishes `/goal_pose` or `/initialpose` through `POST /api/publish`); press-and-hold a layer's swatch to recolour it (remembered per browser) |
+| `…:8092/api/landmarks` | named places with a photo (`GET` list; `POST` add at the robot's pose / rename / recapture / update pose / `DELETE`; `…/<id>/tasks` add / edit / remove a policy run tied to the place; `POST …/<id>/run` hands a task to the voice assistant). Kept in `Scripts/landmarks/landmarks.yaml` + `img/`; the manager's **Landmarks** tab is the UI |
+| `…:8092/api/apriltags` | the taught AprilTag map poses (from the relocalizer's file, `--apriltags-file`) and the tags in view; drawn by the 3D page's **AprilTags** layer (taught = amber, seen = green) |
 | `…:8093/cam/<scene|side|wrist|realsense>.mjpg` | camera feeds as MJPEG on a second port (`--cam-port`, default port+1: browsers allow ~6 connections per host:port and four open streams would starve the pages' own requests) (the three VLA cameras via `scripts/camera_ros_bridge.py`'s `/vla/cameras/<name>/image/compressed`, the RealSense via `/camera/camera/color/image_raw/compressed`); `.jpg` = one frame; both pages show them as a strip on the right (checkbox per feed, click to enlarge) |
 | `POST …:8092/api/halt` | the pages' **HALT** button: cancels every nav2 goal, sends zero velocity (joystick mux input + wheel controller), SIGTERMs path.py / vla_action / eval_hw (the eval's clean EXIT powers the UR down) and stops the `vla_eval` unit; teleop is left alone. In `--sim` it latches until RESUME |
-| `…:8092/3d` | 3D view replicating Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / collision polygons / AMCL particles, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose` |
+| `…:8092/3d` | 3D view replacing Foxglove's 3D panel: map plane, costmaps, Velodyne / RPLiDAR clouds, the URDF robot model with live joints (meshes served from the package share dirs), TF frames, nav2 plans / goal / footprint / stop and slowdown polygons (filled when tripped), AMCL particles, AprilTags, the route, follow-robot camera, click tools publishing `/goal_pose` and `/initialpose`. The side panel folds as accordions (Scene / Sensors / Robot / Navigation / Cameras / Simulation / View point, remembered per browser), the camera panels fold and resize, the tool bar floats; HALT at the bottom |
+| `http://192.168.11.80:8096/` | **Folks**: robot_face's page of the people the robot knows (served by the face node, embedded by the manager's Folks tab) |
+
+![Route editor (simulated robot)](../VLA/docs/img/route-editor.png)
+![2D map view (simulated)](../VLA/docs/img/route-editor-map.png)
+![3D view (simulated)](../VLA/docs/img/route-editor-3d.png)
 
 **Developing without the robot:** the manager's Map tab has a live / sim switch; choosing sim starts
 `route_editor.py --sim` on the manager's own host (port 8094, cameras on 8095) and live stops it again.

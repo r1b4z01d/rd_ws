@@ -96,8 +96,8 @@
     <button id="densify" title="record_path.py densify: intermediate waypoints on long legs (on the saved file)">densify</button>
     <input id="spacing" type="number" step="0.1" value="1.0" title="densify spacing, m">
   </div>
-  <div class="edit-only">
   <div class="map-only"><h3>Cameras</h3><div class="row" id="cam-panel"></div></div>
+  <div class="edit-only">
   <h3>Waypoints <span class="muted" id="count"></span></h3>
   <div id="list"></div>
   <hr class="sep">
@@ -118,8 +118,8 @@
   <textarea id="wactions" placeholder="- vla: tigger_1_merged_smolvla_1&#10;  task: Grab and hold tigger&#10;  done: closed&#10;  keep_grasp: true"></textarea>
   <h3>Output</h3>
   <pre id="out"></pre>
-  <button id="halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button>
   </div><!-- /edit-only -->
+  <button id="halt" class="danger" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button>
 </div>
 <div id="main">
   <canvas id="c"></canvas>

@@ -3,9 +3,11 @@
 Built 2026-10-26 on `4090TI` (RTX 4090 24 GB, 32 cores, 62 GB, 1.8 TB NVMe), replacing `bryan-ubuntu`
 (Ubuntu 20.04, gone). Everything here was run for real on that box; `provision_gpu.sh` is the same steps.
 
-Role: **training** and the **web manager** (`webui/server.py`, `:8081`, the master eval registry). It does
-not serve the robot: the production inference server is RD's (`VLA/services/rd/`, loopback `:8777`);
-`vla_infer_server` here is a manual-start fallback that pins VRAM.
+Role: **training**, the **web manager** (`webui/server.py`, `:8081`, the master eval registry) and the
+**local language model** for the robot's voice assistant (Ollama, `qwen2.5:7b`, `:11434` — supervisor unit
+`ollama`, `ollama.conf` here). It does not serve the VLA policy to the robot: the production inference
+server is RD's (`VLA/services/rd/`, loopback `:8777`); `vla_infer_server` here is a manual-start fallback
+that pins VRAM.
 
 ## 1. Install Ubuntu 24.04
 
@@ -35,20 +37,26 @@ ssh alias, so the address lives in one place instead of a DHCP hostname that mov
 ## 3. Push the VLA tree, then provision
 
 ```bash
-# workstation, from the VLA repo — ~/VLA on the GPU box is NOT a git checkout (see VLA/wiki/Sync-and-Layout.md)
+# workstation, from rd_ws/VLA (the submodule) — ~/VLA on the GPU box is NOT a git checkout (see VLA/wiki/Sync-and-Layout.md)
 rsync -a --exclude='/outputs/' --exclude='.venv*' --exclude='.git/' --exclude='__pycache__/' --exclude='/log/' \
       --exclude='/ros2_ws/build/' --exclude='/ros2_ws/install/' --exclude='/ros2_ws/log/' ./ GPU:~/VLA/
-rsync -a ../rd_ws/provision/gpu/ GPU:~/provision_gpu/
+rsync -a ../provision/gpu/ GPU:~/provision_gpu/
 ssh GPU '~/provision_gpu/provision_gpu.sh all && ~/provision_gpu/provision_gpu.sh data'
 ```
-`all` = `base venv services`; `data` pulls `~/VLA/outputs` (datasets, train runs, eval registry, ~6 GB)
+`all` = `base venv services llm`; `data` pulls `~/VLA/outputs` (datasets, train runs, eval registry, ~6 GB)
 from RD and repoints `outputs/serve_ckpt`. Then browse the web manager at `http://192.168.11.119:8081` and the supervisor UI at `:9999`.
+
+Knobs (environment): `VLA_DIR` (`~/VLA`), `RD_HOST` (`RD`, an ssh alias), `SERVE_RUN` / `SERVE_STEP`
+(`tigger_bed_1_smolvla` / `020000`, what `outputs/serve_ckpt` points at after `data`), `OLLAMA_MODEL`
+(`qwen2.5:7b`, must match robot_voice's `ollama_model`), `SSID` (`RobotDisco`), `WIFI_METRIC` (600).
 
 | Phase | What it does |
 |---|---|
+| `preflight` | always runs first: warns when not Ubuntu 24.04, requires `nvidia-smi` to answer (no driver = stop), notes when sudo needs a password |
 | `base` | `apt-packages-gpu.txt`, supervisor on, `uv` |
 | `venv` | `~/VLA/.venv` (Python 3.12) from `vla-venv-freeze.txt`, then asserts CUDA + SmolVLA import |
 | `services` | supervisor web UI on `:9999` (drop-in `00-inet-http.conf`, no auth, needs a supervisord restart), then `VLA/scripts/install_services.sh` → `vla_webui` (autostart) + `vla_infer_server` (manual) |
+| `llm` | Ollama (installed if missing), its installer's `ollama.service` disabled, **supervisor unit `ollama`** (`ollama.conf`: `OLLAMA_HOST=0.0.0.0` so RD reaches it over Wi-Fi, `OLLAMA_KEEP_ALIVE=1h` (RD's own unit uses 30m), `HOME=/usr/share/ollama` so the model store is found, user `ollama`, log `/var/log/supervisor/ollama.log`), `ollama pull $OLLAMA_MODEL` (qwen2.5:7b). RD's voice assistant asks this box first (`ollama_url`) and its own loopback Ollama second |
 | `data` | rsync `outputs/` from RD, `serve_ckpt` → `train/$SERVE_RUN/checkpoints/$SERVE_STEP/pretrained_model` |
 | `wifi PW` | *(not in `all`)* join `RobotDisco`; Ethernet keeps metric 100, Wi-Fi gets 600 |
 | `extras` | *(not in `all`)* Steam (Proton), Brave, VLC, Remmina, HandBrake, GIMP, Angry IP Scanner, Bambu Studio |
@@ -69,13 +77,18 @@ from RD and repoints `outputs/serve_ckpt`. Then browse the web manager at `http:
   BACKOFF → FATAL with `No module named 'fastapi'` on a new box. Now in `pip-vla-gpu.txt` and the freeze.
 - **The Mac's rsync is openrsync**: `--delete-excluded` against the Ubuntu rsync 3.2.7 aborts with
   `buffer overflow: recv_rules`. Don't use it; the target is empty on first push anyway.
-- **`serve_ckpt` is an absolute symlink** (RD's lives under `/mnt/data/VLA/...`), so it is excluded from
+- **`serve_ckpt` is an absolute symlink** (RD's lives under `/mnt/data/rd_ws/VLA/...`), so it is excluded from
   the `data` pull and re-created for `/home/bryan`.
 - **Two NICs, two subnets**: Ethernet `192.168.1.x` (internet) and Wi-Fi `192.168.11.x` (robot, isolated).
   Both default routes exist; keep wired at metric 100 / Wi-Fi 600. The Mac and RD reach the box on the
   Wi-Fi address (`192.168.11.119`, DHCP — pin a lease if it moves; every consumer goes via the `GPU` alias).
 - **Bambu Studio's asset is `ubuntu24.04`** (no hyphen) — a `ubuntu-24.04` grep silently matches nothing.
 - Passwordless `sudo supervisorctl` comes with the NOPASSWD sudoers line above.
+- **Ollama's installer brings its own systemd unit** (`ollama.service`, enabled, `OLLAMA_HOST` set in a
+  drop-in) — until 2026-11-01 the LLM was the one service on the box outside supervisor. `llm` disables
+  that unit and runs `ollama serve` as the `ollama` user from `ollama.conf`; `HOME=/usr/share/ollama` has
+  to be in the unit or the server comes up with no models (supervisor keeps root's HOME across `user=`).
+  Re-running the installer (upgrade) re-enables the systemd unit → run `provision_gpu.sh llm` again.
 
 ## Not automated
 
