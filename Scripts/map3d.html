@@ -61,10 +61,11 @@
     <h3>Scene</h3>
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-map" checked> map</label>
+      <label class="cb" title="draw the nav map with its colours inverted (dark free space, light walls)"><input type="checkbox" id="l-invert" checked> invert map</label>
       <label class="cb"><input type="checkbox" id="l-grid" checked> grid</label>
       <label class="cb"><input type="checkbox" id="l-global" checked><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
-      <label class="cb"><input type="checkbox" id="l-local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
-      <label class="cb">opacity <input type="number" id="cmalpha" value="40" min="5" max="100" step="5"> <span class="unit">%</span></label>
+      <label class="cb"><input type="checkbox" id="l-local" checked><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
+      <label class="cb">opacity <input type="number" id="cmalpha" value="15" min="5" max="100" step="5"> <span class="unit">%</span></label>
     </div>
     <h3>Sensors</h3>
     <div class="row velodyne">
@@ -193,6 +194,22 @@ function setTexture(mesh, url, cb) {
   });
 }
 let mapMesh = null;
+function setMapTexture() {
+  // the nav map, optionally inverted (dark free space, light walls) through a canvas filter
+  if (!mapMesh || !MAP) return;
+  const im = new Image();
+  im.onload = () => {
+    const c = document.createElement("canvas"); c.width = im.naturalWidth; c.height = im.naturalHeight;
+    const g = c.getContext("2d");
+    if ($("#l-invert").checked) g.filter = "invert(1)";
+    g.drawImage(im, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter; t.minFilter = THREE.LinearFilter; t.colorSpace = THREE.SRGBColorSpace;
+    if (mapMesh.material.map) mapMesh.material.map.dispose();
+    mapMesh.material.map = t; mapMesh.material.needsUpdate = true;
+  };
+  im.src = MAP.image;
+}
 const costmaps = {};                                      // name -> {mesh, stamp}
 const CM_COLORS = { global: "", local: "" };              // "" = the server's default palette
 
@@ -479,12 +496,12 @@ async function pollCostmaps() {
     const meta = await fetch(`/api/costmap?name=${name}${CM_COLORS[name] ? "&color=" + CM_COLORS[name].replace("#", "") : ""}`).then((r) => r.json());
     if (meta.error) continue;
     let cm = costmaps[name];
-    if (!cm) { cm = { mesh: groundPlane(meta, name === "global" ? 0.01 : 0.02, 0.4), stamp: null }; scene.add(cm.mesh); costmaps[name] = cm; }
+    if (!cm) { cm = { mesh: groundPlane(meta, name === "global" ? 0.01 : 0.02, 0.15), stamp: null }; scene.add(cm.mesh); costmaps[name] = cm; }
     cm.mesh.position.set(meta.origin[0], meta.origin[1], cm.mesh.position.z); cm.mesh.rotation.z = meta.yaw || 0;
     if (cm.mesh.userData.size[0] !== meta.width || cm.mesh.userData.size[1] !== meta.height) {   // size changed: rebuild
       scene.remove(cm.mesh); cm.mesh.geometry.dispose(); cm.mesh = groundPlane(meta, cm.mesh.position.z, 0.4); scene.add(cm.mesh); cm.stamp = null;
     }
-    cm.mesh.material.opacity = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 40) / 100));
+    cm.mesh.material.opacity = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 15) / 100));
     if (cm.stamp !== meta.stamp) { cm.stamp = meta.stamp; setTexture(cm.mesh, meta.image, () => { cm.mesh.visible = true; }); }
     cm.mesh.visible = !!cm.mesh.material.map;
   }
@@ -500,6 +517,7 @@ $("#routes").onchange = () => loadRoute($("#routes").value);
 { const d = $("#velodyne-settings"); try { d.open = localStorage.getItem("map3d.velodyneSettings") === "open"; } catch (e) { /* no storage */ }
   d.addEventListener("toggle", () => { try { localStorage.setItem("map3d.velodyneSettings", d.open ? "open" : "closed"); } catch (e) { /* ignore */ } }); }
 for (const id of ["#l-map", "#l-grid", "#l-robot", "#l-frames", "#l-plan", "#l-localplan", "#l-goal", "#l-footprint", "#l-stop", "#l-slowdown", "#l-particles", "#l-route", "#l-velodyne", "#l-s1", "#l-s2e"]) $(id).onchange = applyVisibility;
+$("#l-invert").onchange = setMapTexture;
 $("#ptsize").onchange = () => { for (const p of Object.values(clouds)) p.material.size = parseFloat($("#ptsize").value) || 2; };
 $("#cam-reset").onclick = () => setView(pose ? robotPos.clone() : new THREE.Vector3(MAP ? MAP.origin[0] + MAP.width * MAP.resolution / 2 : 0, MAP ? MAP.origin[1] + MAP.height * MAP.resolution / 2 : 0, 0));
 $("#cam-top").onclick = () => setView(controls.target.clone(), camera.position.distanceTo(controls.target), 0.01, 90);
@@ -554,7 +572,7 @@ function animate() {
 
 (async () => {
   MAP = await fetch("/api/map").then((r) => r.json());
-  mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setTexture(mapMesh, MAP.image);
+  mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setMapTexture();
   setView(new THREE.Vector3(MAP.origin[0] + MAP.width * MAP.resolution / 2, MAP.origin[1] + MAP.height * MAP.resolution / 2, 0), 28, 30, 122);
   loadRoutes().catch(() => {});
   loop(pollTf, 66); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000);
