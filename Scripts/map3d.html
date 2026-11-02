@@ -108,7 +108,6 @@
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-robot" checked> robot model (URDF)</label>
       <label class="cb"><input type="checkbox" id="l-frames"> TF frames</label>
-      <label class="cb"><input type="checkbox" id="follow" checked> follow robot</label>
     </div>
     <section class="acc open" data-acc="navigation">
     <h3 class="acc-head" role="button" tabindex="0" aria-expanded="true">Navigation</h3>
@@ -139,6 +138,9 @@
     <h3>View point</h3>
     <div class="row">
       <button id="cam-reset">reset</button><button id="cam-top">top-down</button><button id="cam-robot">look at robot</button>
+    </div>
+    <div class="row">
+      <label class="cb"><input type="checkbox" id="follow" checked> follow robot</label>
     </div>
     <div id="out" class="mono"></div>
     <button id="t-halt" class="danger halt" title="STOP ALL MOTION: cancel the nav2 goal, zero velocity, stop the route runner and the VLA action / eval">HALT</button>
