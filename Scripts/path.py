@@ -15,7 +15,7 @@ post_actions entries (per waypoint, and for initial_pose):
     wait: true                      blocking: the robot STOPS at this waypoint until the command exits
     on_fail: stop | continue        blocking only: a non-zero exit stops the route (default) or not
   - vla: <model>                    a VLA policy run on the arm (always blocking): model = a training run
-    task: "..."                       name, run@step, or a path under ~/VLA/outputs/train; task = the
+    task: "..."                       name, run@step, or a path under ~/rd_ws/VLA/outputs/train; task = the
     seconds: 120                      string it was trained with. Cap on the playing phase (wall clock).
     still: 0                        finish early after N s without commanded motion (0 = off)
     done: none                      closed | open — end by the GRASP LEVEL: 'closed' once the mean
@@ -35,7 +35,7 @@ segment starts. A failed blocking action with on_fail: stop ends the route where
 DEADMAN: once the route is running, pressing the gamepad's drive-enable or turbo button (the indices in
 src/robot_disco/config/joystick.yaml) cancels the Nav2 goal and ends the route; a blocking action running
 at that moment is sent SIGTERM (the eval's clean exit) first. --no-deadman-stop disables it.
-`vla:` actions go through ~/VLA/scripts/vla_action.py, which stops the recording panel if it runs,
+`vla:` actions go through ~/rd_ws/VLA/scripts/vla_action.py (rd_ws/VLA, the submodule), which stops the recording panel if it runs,
 switches the inference server to the model, runs scripts/eval_hw.py --auto and returns when the arm is
 back home; see VLA/wiki/Deploy-on-Hardware.md.
 """
@@ -53,7 +53,8 @@ from typing import Callable, Optional
 
 import yaml
 
-VLA_DIR = os.environ.get("VLA_DIR", os.path.expanduser("~/VLA"))
+# the VLA checkout: rd_ws/VLA, the git submodule beside this Scripts/ dir (VLA_DIR overrides)
+VLA_DIR = os.environ.get("VLA_DIR") or str(Path(__file__).resolve().parent.parent / "VLA")
 JOYSTICK_YAML = Path(__file__).resolve().parent.parent / "src" / "robot_disco" / "config" / "joystick.yaml"
 
 

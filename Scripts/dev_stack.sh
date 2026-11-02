@@ -7,11 +7,11 @@
 #   Scripts/dev_stack.sh start|stop|status|logs
 #
 # The manager's Map tab also starts the simulator by itself when its switch goes to sim (same port).
-# Needs: python3 with numpy/Pillow/PyYAML for the editor; VLA/.venv with mujoco, lerobot, fastapi,
+# Needs: python3 with numpy/Pillow/PyYAML for the editor; rd_ws/VLA/.venv with mujoco, lerobot, fastapi,
 # uvicorn, python-multipart for the panel and the manager. Logs go to /tmp/dev_stack/.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-VLA="${VLA_DIR:-$HERE/../../VLA}"
+VLA="${VLA_DIR:-$HERE/../VLA}"   # rd_ws/VLA, the submodule
 LOG=/tmp/dev_stack; mkdir -p "$LOG"
 EDITOR_PORT="${EDITOR_PORT:-8094}"; PANEL_PORT="${PANEL_PORT:-8090}"; MANAGER_PORT="${MANAGER_PORT:-8081}"   # 8094: the sim never shares the live editor's 8092
 ROUTE="${SIM_ROUTE:-}"

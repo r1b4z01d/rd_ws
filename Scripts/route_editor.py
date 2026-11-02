@@ -250,7 +250,7 @@ def apriltags() -> dict:
             "file": c["path"], "t": time.time()}
 
 
-# A landmark's TASKS tie a policy run (an eval, VLA/scripts/vla_action.py) to the place it is done at:
+# A landmark's TASKS tie a policy run (an eval, rd_ws/VLA/scripts/vla_action.py) to the place it is done at:
 # "pick up tigger" = drive to the right bookshelf, then run tigger_1_merged_smolvla_1 with the task string
 # "Grab and hold tigger". The voice assistant (rd_ws/src/robot_voice) reads landmarks.yaml for the phrases it
 # answers to and does the driving + the run; "run" here only hands it the job over the run_task topic.

@@ -3,7 +3,7 @@
 #   cd ~/rd_ws/Scripts && python3 path.py tigger_route.yaml      # then: ros2 service call /start_waypoints std_srvs/srv/Trigger {}
 #   python3 path.py --check tigger_route.yaml                     # dry parse: segments + the commands, no ROS
 #
-# Before starting: the arm at its home/transport pose (~/VLA/outputs/home_pose.json), the UR pendant in
+# Before starting: the arm at its home/transport pose (~/rd_ws/VLA/outputs/home_pose.json), the UR pendant in
 # Remote Control, vla_cameras running. Nothing else is needed: each `vla:` action stops the recording
 # panel if it is up, switches the inference server to its model (a ~30 s restart only when the model
 # changes), runs the policy unattended, and returns the arm home before the robot drives on.
@@ -16,7 +16,7 @@ waypoints:
       # The grab model. tigger_1_merged predates capture.json; it was recorded with scene/side square-cropped to
       # the MIDDLE of the frame (540x540). A backfilled capture.json (squares 0.5/0.5, 2026-10-26) travels with
       # the run, so the eval sets the cameras to that crop before the first observation.
-      - vla: tigger_1_merged_smolvla_1         # training run under ~/VLA/outputs/train (run@step or a path also work)
+      - vla: tigger_1_merged_smolvla_1         # training run under ~/rd_ws/VLA/outputs/train (run@step or a path also work)
         task: "Grab and hold tigger"           # the task string the run was trained with
         seconds: 90                            # cap on the playing phase
         done: closed                           # over when the hand has closed and stayed closed (mean curl >= 0.7

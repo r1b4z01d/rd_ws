@@ -1,4 +1,4 @@
-# Fallback dependency list for the VLA project venv on the robot PC (~/VLA/.venv, Python 3.10).
+# Fallback dependency list for the VLA project venv on the robot PC (~/rd_ws/VLA/.venv, Python 3.10).
 # Prefer the exact freeze captured from a working robot PC (snapshot/vla-venv-freeze.txt) — provision.sh
 # uses that automatically when present. This list is derived from imports in VLA/ur5e_lerobot and
 # VLA/scripts and from VLA/wiki/Machines-and-Network.md (lerobot 0.4.4 on both the GPU box and RD).

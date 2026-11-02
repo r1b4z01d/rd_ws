@@ -41,3 +41,6 @@
 [submodule "src/foxglove_bridge"]
 	path = src/foxglove_bridge
 	url = https://github.com/foxglove/ros-foxglove-bridge.git
+[submodule "VLA"]
+	path = VLA
+	url = https://github.com/r1b4z01d/VLA.git
