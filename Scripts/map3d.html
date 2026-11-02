@@ -349,7 +349,10 @@ function tagObject(id, size, seen) {
   const grp = new THREE.Group();
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: tagTexture(id, seen), side: THREE.DoubleSide }));
   const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(size * 1.25, size * 1.25)), new THREE.LineBasicMaterial({ color: seen ? TAG_COLORS.seen : TAG_COLORS.taught, linewidth: 2 }));
-  const label = textSprite(`tag ${id}`, seen ? "#9fe3a6" : "#ffd166"); label.position.set(0, size * 0.9, 0.05);
+  const label = textSprite(`tag ${id}`, seen ? "#9fe3a6" : "#ffd166"); label.position.set(size * 0.9, 0, 0.05);
+  // the detector's tag frame has the printed tag's "up" along -x of the frame: turn the face 90° clockwise
+  // (seen with the tag's z toward you) so the number reads the way the paper tag does (2026-11-01)
+  mesh.rotation.z = -Math.PI / 2;
   grp.add(mesh, edge, label);
   return { grp, mesh, edge, label, seen };
 }
