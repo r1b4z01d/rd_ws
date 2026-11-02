@@ -62,7 +62,7 @@
     <div class="row">
       <label class="cb"><input type="checkbox" id="l-map" checked> map</label>
       <label class="cb" title="draw the nav map with its colours inverted (dark free space, light walls)"><input type="checkbox" id="l-invert" checked> invert map</label>
-      <label class="cb"><input type="checkbox" id="l-grid" checked> grid</label>
+      <label class="cb"><input type="checkbox" id="l-grid"> grid</label>
       <label class="cb"><input type="checkbox" id="l-global" checked><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
       <label class="cb"><input type="checkbox" id="l-local" checked><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
       <label class="cb">opacity <input type="number" id="cmalpha" value="15" min="5" max="100" step="5"> <span class="unit">%</span></label>
@@ -80,7 +80,7 @@
       </details>
     </div>
     <div class="row">
-      <label class="cb"><input type="checkbox" id="l-s1"><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
+      <label class="cb"><input type="checkbox" id="l-s1" checked><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
       <label class="cb"><input type="checkbox" id="l-s2e" checked><span class="sw" data-key="s2e" style="background:#39d353"></span>S2E</label>
     </div>
     <h3>Robot</h3>
@@ -149,7 +149,7 @@ controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, R
 scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3f55, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 2.0); sun.position.set(6, -8, 14); scene.add(sun);
 
-const grid = new THREE.GridHelper(60, 60, 0x4b5265, 0x2b2f3b);
+const grid = new THREE.GridHelper(60, 60, 0xff69b4, 0xff69b4);           // hot pink
 grid.rotation.x = Math.PI / 2; grid.position.z = 0.03; grid.material.depthWrite = false; grid.material.transparent = true; grid.material.opacity = 0.7;
 scene.add(grid);
 const axes = new THREE.AxesHelper(1); axes.position.z = 0.035; scene.add(axes);
@@ -509,8 +509,7 @@ async function pollCostmaps() {
 async function loadRoutes() {
   const d = await fetch("/api/routes").then((r) => r.json());
   const s = $("#routes"); s.innerHTML = `<option value="">(none)</option>` + d.routes.map((n) => `<option>${n}</option>`).join("");
-  const pre = ["tigger_test", "tigger"].find((n) => d.routes.includes(n)); if (pre) s.value = pre;
-  await loadRoute(s.value);
+  await loadRoute(s.value);                                  // default (none): pick a route from the list to show it
 }
 $("#routes").onchange = () => loadRoute($("#routes").value);
 // the Velodyne settings fold stays as you left it (per browser)
