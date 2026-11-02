@@ -106,7 +106,7 @@ Initialize the ROS submodules with `git submodule update --init --recursive -- s
 
 **Path**: `src/robot_face/`
 **Maintainer**: Bryan Ribas (bryanribas@gmail.com)
-**License**: CC BY-NC-SA (`package.xml`; `setup.py` still says Apache-2.0)
+**License**: CC BY-NC-SA
 
 Provides a real-time animated robot face driven by the camera. The face is drawn in a GPU-accelerated OpenGL window: two eyes with moods, blinking and gaze tracking, and a mouth that rests in a slight smile, traces the robot's speech as a waveform, and pulls random expressions while nobody is around. The node recognises people it has met (ArcFace embeddings from a worker process in its own venv, OpenCV YuNet + SFace as the fallback; learned on the fly and persisted to disk), greets them by name through Kokoro TTS, waves the UR5e arm at people it knows while the AmazingHand's fingers ripple, serves the **Folks** web page of the people it knows, and keeps the USB speaker the default audio sink. An optional legacy mode streams the operator's hand joints to the AmazingHand over TCP (`relay_hand`); the robot runs with `face_only: true`, which never loads the hand model.
 
@@ -569,6 +569,7 @@ Notes for RD:
 ### robot_voice
 
 **Path**: `src/robot_voice/`
+**License**: CC BY-NC-SA
 
 Voice assistant: say **"Robot Disco, …"** and the robot answers out loud through the face (Kokoro voice, mouth in sync). Full details in [src/robot_voice/README.md](src/robot_voice/README.md).
 
@@ -1373,3 +1374,14 @@ All poses are in the `map` frame, so they must be re-recorded after a fresh SLAM
 ROS_DOMAIN_ID=0 ros2 topic pub /battery sensor_msgs/BatteryState \
   "{percentage: 0.82, power_supply_status: 0}"
 ```
+
+## License
+
+Everything written for this robot (`Scripts/`, `provision/`, `services/`, `documents/`, `robot_face`,
+`robot_voice`, the `robot_disco` and `VLA` submodules) is released under
+[CC BY-NC-SA 4.0](LICENSE): share and adapt it with attribution, not commercially, under the same terms.
+Third-party code keeps its own license: the `AmazingHand-main` fork (Apache-2.0 software, CC BY 4.0
+mechanical design from Pollen Robotics), `foxglove_bridge` (MIT), `foxglove_studio` (MPL-2.0), the other
+`src/` submodules, the vendored three.js / urdf-loader under `Scripts/static/vendor/`, the OpenCV model zoo
+files under `src/robot_face/models/`, and the nav2 / realsense launch templates in `robot_disco/launch/`
+(Apache-2.0 headers).

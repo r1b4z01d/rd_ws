@@ -29,7 +29,7 @@ setup(
     maintainer="Bryan Ribas",
     maintainer_email="bryanribas@gmail.com",
     description="ROS 2 eyes + hand tracking node using MediaPipe and a subscribed image topic.",
-    license="Apache-2.0",
+    license="CC BY-NC-SA",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
