@@ -82,7 +82,8 @@
   <div class="row" id="costmaps">
     <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
     <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
-    <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="25" style="width:60px">%</label>
+    <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="15" style="width:60px">%</label>
+    <label class="cb" title="draw the nav map with its colours inverted (dark free space, light walls)"><input type="checkbox" id="invertmap" checked> invert map</label>
   </div>
   <div class="muted" id="scaninfo" style="font-size:11px"></div>
   <div class="row edit-only">
@@ -155,7 +156,7 @@ function setMode(m) {
   $("#mode-edit").classList.toggle("accent", m === "edit"); $("#mode-map").classList.toggle("accent", m === "map");
   $("#title").textContent = m === "map" ? "Map" : "Route Editor";
   document.querySelectorAll("input.layer").forEach(c => { c.checked = m === "map"; });
-  document.querySelectorAll("input.cmlayer").forEach(c => { c.checked = m === "map" && c.dataset.cm === "global"; });
+  document.querySelectorAll("input.cmlayer").forEach(c => { c.checked = m === "map"; });     // map mode: both costmaps on
   if (m === "map") { $("#showroute").checked = false; sel = -1; }
   else { $("#showroute").checked = true; }
   const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); window.history.replaceState(null, "", u);
@@ -193,7 +194,9 @@ function draw() {
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
   ctx.imageSmoothingEnabled = view.scale < 2;
+  if ($("#invertmap").checked) ctx.filter = "invert(1)";
   ctx.drawImage(img, view.tx, view.ty, MAP.width * view.scale, MAP.height * view.scale);
+  ctx.filter = "none";
   // costmap overlays (between the map and everything live), at the chosen opacity
   const cmSel = new Set(cmOn());
   for (const [name, cm] of Object.entries(costmaps)) {
@@ -203,7 +206,7 @@ function draw() {
     const M = cm.meta; const [a, b] = w2c(M.origin[0], M.origin[1]);
     const Wpx = M.width * M.resolution / MAP.resolution * view.scale, Hpx = M.height * M.resolution / MAP.resolution * view.scale;
     ctx.save(); ctx.translate(a, b); ctx.rotate(-(M.yaw || 0));
-    ctx.globalAlpha = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 25) / 100));
+    ctx.globalAlpha = Math.max(0.05, Math.min(1, (parseFloat($("#cmalpha").value) || 15) / 100));
     ctx.drawImage(cm.img, 0, -Hpx, Wpx, Hpx);
     ctx.restore();
   }
@@ -415,7 +418,7 @@ async function pollCostmaps() {
   draw();
   setTimeout(pollCostmaps, 1000);
 }
-document.querySelectorAll("input.cmlayer").forEach(c => c.onchange = draw); $("#cmalpha").onchange = draw;
+document.querySelectorAll("input.cmlayer").forEach(c => c.onchange = draw); $("#cmalpha").onchange = draw; $("#invertmap").onchange = draw;
 $("#showroute").onchange = draw;
 $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => setMode("map");
 (async () => {
