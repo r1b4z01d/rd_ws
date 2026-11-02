@@ -209,6 +209,8 @@ def task_from_body(body: dict, cur: "dict | None" = None) -> dict:
         v = body[k]
         if k in ("name", "model", "task", "still_mode", "extra", "done_when"):
             v = str(v or "").strip()
+            if k == "name":
+                v = v.rstrip(" .!?,").lower()       # what you say — the matcher compares lower-case words
             if k == "done_when" and v not in ("", "none", "closed", "open"):
                 raise ValueError("done_when must be none, closed or open")
             if k == "still_mode" and v not in ("", "all", "fingers"):
