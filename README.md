@@ -204,6 +204,7 @@ Camera Image Topic
 | `render_fps` | `30.0` | The face animates on its own timer at this rate; camera frames only steer it, so a stopped camera never freezes the face |
 | `camera_timeout` | `3.0` | Seconds without frames before the face drops the tracked person and logs a warning |
 | `fullscreen` | `true` | Start fullscreen on the primary monitor. Clicking the face, or pressing F, toggles windowed/fullscreen; Esc leaves fullscreen. Live-settable with `ros2 param set` |
+| `window_focus_seconds` | `10.0` | How long after start (and after entering fullscreen) the face keeps asking GNOME to focus its window, twice a second. A window that supervisor opened gets no focus from GNOME's focus-stealing prevention, and an unfocused fullscreen window sits behind the desktop; the face also never minimises itself (GLFW's auto-iconify is off). `0` disables |
 | `width` | `1280` | Camera frame width (px) |
 | `height` | `720` | Camera frame height (px) |
 | `fps` | `30.0` | Expected capture framerate |
@@ -478,7 +479,7 @@ Off on the robot (`face_only`). When enabled, MediaPipe hand landmarks become se
 
 #### OpenGL Eye Renderer (`gl_eye_renderer.py`)
 
-Renders the face with a GLSL fragment shader in a GLFW window titled **"Robot Disco"**. All geometry is computed per-pixel on the GPU in a fixed **1080×1900 design canvas**; in fullscreen (the default) the canvas is scaled to fit the monitor and letterboxed, so the layout is identical on RD's portrait 1080×1920 display (10 px bars) or a landscape screen. A click on the face or the F key toggles between fullscreen and a window, Esc leaves fullscreen.
+Renders the face with a GLSL fragment shader in a GLFW window titled **"Robot Disco"**. All geometry is computed per-pixel on the GPU in a fixed **1080×1900 design canvas**; in fullscreen (the default) the canvas is scaled to fit the monitor and letterboxed, so the layout is identical on RD's portrait 1080×1920 display (10 px bars) or a landscape screen. A click on the face or the F key toggles between fullscreen and a window, Esc leaves fullscreen. Started by supervisor the window would not be focused (GNOME only focuses windows the user opened) and GLFW would minimise the unfocused fullscreen window: the renderer turns that auto-iconify off and asks for focus for `window_focus_seconds` after start, logging `window: focused after N request(s)`.
 
 Visual features:
 - Dark purple background with animated electric-purple horizontal scanlines
@@ -916,7 +917,7 @@ docker compose -f foxglove_studio/compose.foxglove.yaml up
 
 [Supervisord](http://supervisord.org/) manages all major robot subsystems as persistent background processes. Services auto-restart on failure where appropriate and write rotating logs to `~/rd_ws/log/`. The supervisor web UI is on `http://192.168.11.80:9999/` (no auth, LAN only), and the VLA manager's **Services** tab (`http://192.168.11.119:8081/#services`, or the robot's own manager on :8081) lists the same units with start / stop / restart, log tails and an **ordered base restart** (robot_disco → localization → navigation → collision monitor → route editor, each given time to settle, so every node rebinds to live publishers).
 
-<!-- TODO screenshot: supervisor-ui.png — http://192.168.11.80:9999/ (robot only, not yet captured) -->
+![Supervisor status page on the robot](documents/img/supervisor-ui.png)
 
 ### Installation
 
@@ -1120,7 +1121,7 @@ Named people are greeted by name ("hello Bryan"). If the face is only recognised
 
 **Folks page.** The face node serves `http://<robot>:8096/` (and the VLA manager shows it as the **Folks** tab): one card per known person with their face picture, an editable name (Enter or click Save; giving a card a name that already exists merges the two records), first/last seen, how often they were recognised, a Forget button, and a live "in view" badge on whoever is in front of the camera. Each card also shows the last hello and a **Reset hello** button (greet them again before the cooldown ends) and a **snap** button (replace the picture with the next confirmed sighting). JSON under `/api/people`, `/api/live`, `GET /thumb/<id>.jpg`, `POST /api/people/<id>/name`, `POST /api/people/<id>/forget`, `POST /api/people/<id>/snap`, `POST /api/people/<id>/reset_greeting`, `POST /api/forget_all`.
 
-<!-- TODO screenshot: folks-page.png — http://192.168.11.80:8096/ (robot only, not yet captured) -->
+<!-- No screenshot on purpose: the page shows people's faces and names. -->
 
 ### Drive the mouth from your own audio
 
