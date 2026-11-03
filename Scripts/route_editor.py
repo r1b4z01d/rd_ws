@@ -434,7 +434,14 @@ def ros_pose_thread() -> None:
         from sensor_msgs.msg import LaserScan, PointCloud2
         from sensor_msgs_py import point_cloud2 as pc2
 
-        rclpy.init()
+        # Leave the signals to Python: rclpy's own SIGTERM handler only shut the ROS context down, the HTTP
+        # main thread kept serving and supervisor had to SIGKILL the unit after stopwaitsecs (10 s) on every
+        # restart — which broke the manager's ordered base restart (stop timed out, start raced it, 2026-11-03).
+        try:
+            from rclpy.signals import SignalHandlerOptions
+            rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+        except (ImportError, TypeError):                 # older rclpy: default handlers
+            rclpy.init()
         node = Node("route_editor")
         STATE["ros_up"] = True
         # The TF listener gets its OWN node and (explicitly!) its own spin thread: rclpy's
