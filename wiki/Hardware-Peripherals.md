@@ -44,7 +44,15 @@ curl -X POST http://<right-panel-ip>/json/state \
 
 ## Audio: USB speaker and microphone
 
-**Speaker**: the dock's C-Media USB audio adapter (PulseAudio sink `C-Media`). **Microphone**: a TONOR G11 USB microphone (source `TONOR`). There is no Bluetooth audio.
+**Playback chain**: the dock's C-Media USB audio adapter (PulseAudio sink `C-Media`) feeds a 2.1 amplifier (50 W + 50 W + 100 W) that drives the speakers:
+
+| Part | What |
+|---|---|
+| [Speakers](https://www.amazon.com/dp/B00JDVAOCQ) | a pair of Cerwin-Vega 3-way 6x9 speakers (the two 50 W channels) |
+| [Subwoofer](https://hexibase.com/3-subwoofer-enclosure-v-2-plus-demo/) | a 3" HexiBase subwoofer in a HexiBase enclosure (the 100 W channel) |
+| [Amplifier](https://www.amazon.com/dp/B0CCJQBWST) | the 2.1 channel amplifier, 50 W + 50 W + 100 W |
+
+Software only sees the USB adapter, so the volume skill and `pactl` set the level before the amplifier; the amplifier's own knobs set the ceiling. **Microphone**: a TONOR G11 USB microphone (source `TONOR`). There is no Bluetooth audio.
 
 `provision/pulse/default.pa` (installed to `~/.config/pulse/default.pa` by `provision.sh audio`) sets the adapter as the default sink and unloads `module-switch-on-connect` (a freshly plugged USB mic once stole the output) and `module-suspend-on-idle` (clipped first syllables); the phase also unmutes the sink and runs `alsactl store`, because the adapter came back muted at boot on 2026-10-31. At runtime the face node's `SinkWatchdog` (`audio_sink` parameter) keeps the adapter the default sink whenever it is present and pins `aplay` to it, and the voice assistant's volume skill drives the same sink (`volume_sink`). Anything that should come out of the speaker (`ffplay`, `aplay`, `paplay`) just uses the default sink. "No audio" usually means the sink is muted: `pactl set-sink-mute @DEFAULT_SINK@ 0`, then `alsactl store`.
 
