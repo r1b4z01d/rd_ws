@@ -5,12 +5,27 @@
      Nav2's controller lost the map frame, AMCL ignored /initialpose, a fresh node saw no TF
      (2026-10-27/28, three times). Set through FASTRTPS_DEFAULT_PROFILES_FILE in each supervisor
      unit (services/*.conf) and in rd's shell. UDP-only participants interoperate with SHM-enabled
-     ones, so mixing is harmless; on one host this all stays on loopback. -->
+     ones, so mixing is harmless; on one host this all stays on loopback.
+
+     2026-11-03: LOOPBACK ONLY. Twice in one evening the controller_server's TF listener stopped receiving
+     AMCL's map->odom a minute or two after the navigation unit started, while AMCL kept publishing and
+     every other listener got it (every goal failed, the recovery spin ran forever = "the robot keeps
+     turning right"). The Jetson carries a WiFi interface that is UP without carrier and a down bridge
+     (l4tbr0); FastDDS announces a unicast locator on every interface, so a peer can pick a dead path.
+     Every ROS process runs on this host (the manager and the GPU box talk HTTP), so DDS is confined to
+     127.0.0.1: the whitelist makes Fast DDS use unicast discovery over localhost, and maxInitialPeersRange
+     is raised because unicast discovery only probes that many participant ports per host (the default 4
+     is far below the ~20 participants here). Needs EVERY unit restarted (or a reboot) to take effect
+     together: a loopback-only participant cannot see one that still announces eno1 only. -->
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <transport_descriptors>
     <transport_descriptor>
       <transport_id>udp_only</transport_id>
       <type>UDPv4</type>
+      <interfaceWhitelist>
+        <address>127.0.0.1</address>
+      </interfaceWhitelist>
+      <maxInitialPeersRange>64</maxInitialPeersRange>
     </transport_descriptor>
   </transport_descriptors>
   <participant profile_name="udp_only_participant" is_default_profile="true">
