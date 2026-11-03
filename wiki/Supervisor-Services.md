@@ -27,8 +27,8 @@ This copies every `services/*.conf` to `/etc/supervisor/conf.d/` and reloads the
 | `robot_disco_route_editor` | `python3 Scripts/route_editor.py --port 8092` (editor, 2D map, 3D view, landmarks, cameras :8093) | **true** | **true** |
 | `robot_disco_apriltag_relocalization` | `ros2 launch robot_disco apriltag_relocalization_launch.py` | false | true |
 | `robot_disco_ur5e_driver` | `ros2 launch robot_disco ur5e.launch.py` | false | true |
-| `robot_disco_foxglove_bridge` | `ros2 launch robot_disco foxglove_bridge_launch.xml` | false | true |
-| `robot_disco_foxglove_studio` | `docker run ... robotdisco/foxglove` (:8080) | false | true |
+| `robot_disco_foxglove_bridge` | `ros2 launch robot_disco foxglove_bridge_launch.xml` | false | true |  *(deprecated, manual start)*
+| `robot_disco_foxglove_studio` | `docker run ... robotdisco/foxglove` (:8080) | false | true |  *(deprecated, manual start)*
 | `robot_face` | `ros2 launch robot_face combined_face_hand.launch.py` | false | false |
 | `robot_voice` | `ros2 launch robot_voice voice_assistant.launch.py` (sources `~/.robot_face/voice.env` first) | false | true |
 | `ollama` | `/usr/local/bin/ollama serve` (user `ollama`, loopback `:11434`, keep-alive 30 min; the voice assistant's on-robot fallback model) | **true** | **true** |
@@ -43,7 +43,7 @@ The `vla_*` units come from `VLA/services/rd/`. On boot the collision monitor, t
 
 ## Service Details
 
-**`robot_disco_foxglove_studio`** runs the Foxglove web UI inside Docker:
+**`robot_disco_foxglove_studio`** (deprecated, manual start) runs the Foxglove web UI inside Docker:
 ```
 docker run --rm --name foxglove \
   --publish 8080:8080 \

@@ -1,4 +1,6 @@
-# Foxglove Studio
+# Foxglove Studio (deprecated)
+
+> **Deprecated.** Foxglove Studio and the Foxglove WebSocket bridge are kept here for reference only and are no longer part of the normal workflow. The main GUI is our own: the route editor's pages ([Route-Editor-and-Path-Runner](Route-Editor-and-Path-Runner)) and the VLA web manager (the VLA wiki's [Web-Manager](https://github.com/r1b4z01d/VLA/wiki/Web-Manager)). Nothing on this page needs to run for the robot to work.
 
 **Path**: `foxglove_studio/`
 

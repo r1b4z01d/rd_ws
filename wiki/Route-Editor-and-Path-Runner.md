@@ -75,8 +75,8 @@ What it does, in order:
 1. Waits for Nav2 to become active.
 2. Loads `waypoints.yaml` from the same directory, or the route file given as the first argument.
 3. If the file has an `initial_pose`, publishes it to `/initialpose` to seed AMCL, then runs its `post_actions`.
-4. Publishes the route on `/waypoints_path` (`nav_msgs/Path`, transient-local) so the pages and Foxglove show it.
-5. Waits for the `start_waypoints` Trigger service — the Foxglove "Party" button calls it — then runs Nav2 `FollowWaypoints`.
+4. Publishes the route on `/waypoints_path` (`nav_msgs/Path`, transient-local) so the pages show it.
+5. Waits for the `start_waypoints` Trigger service, which starts the run: `ros2 service call /start_waypoints std_srvs/srv/Trigger {}` (the old Foxglove "Party" panel called it too), then runs Nav2 `FollowWaypoints`.
 6. Runs each waypoint's background `post_actions` when the robot moves on to the next waypoint (arrival is inferred from the action feedback index advancing), and the last waypoint's on completion. A `pause: N` stops the robot there N s before its other actions run. A waypoint with a **blocking** action (`wait: true`, or any `vla:` action) ends a `FollowWaypoints` segment: the robot stops there, the blocking actions run in order while the node keeps spinning, then the next segment starts. A failed blocking action with `on_fail: stop` (the default) ends the route where the robot stands; Nav2 skipping a waypoint (`missed_waypoints`) also stops it.
 
 Two guards run the whole time. **Deadman**: pressing the gamepad's drive-enable (RB) or turbo (LB) button (the indices in `src/robot_disco/config/joystick.yaml`) cancels the Nav2 goal and ends the route, SIGTERMing a running blocking action first (the eval's clean exit); `--no-deadman-stop` disables it. **Localization watchdog**: a map pose missing or stale for 3 s cancels the route, since Nav2 otherwise spins in recovery. The pages' **HALT** button SIGTERMs `path.py` too.

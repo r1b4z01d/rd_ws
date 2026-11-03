@@ -25,7 +25,7 @@ Everything below the overview lives in the [wiki](https://github.com/r1b4z01d/rd
 - [Third-Party-Packages](https://github.com/r1b4z01d/rd_ws/wiki/Third-Party-Packages): apriltag, roboclaw, the lidar drivers and the VLA submodule.
 - [Hardware-Peripherals](https://github.com/r1b4z01d/rd_ws/wiki/Hardware-Peripherals): the WLED panels, audio, the retired T265.
 - [Supervisor-Services](https://github.com/r1b4z01d/rd_ws/wiki/Supervisor-Services): every supervisor unit, install and `supervisorctl` recipes.
-- [Foxglove-Studio](https://github.com/r1b4z01d/rd_ws/wiki/Foxglove-Studio): the Foxglove fork, custom panel, layout and Docker setup (manual start).
+- [Foxglove-Studio](https://github.com/r1b4z01d/rd_ws/wiki/Foxglove-Studio): **deprecated**; the Foxglove fork, custom panel, layout and Docker setup, kept for reference. The main GUI is the route editor and the web manager.
 - [Provisioning-and-Deploy](https://github.com/r1b4z01d/rd_ws/wiki/Provisioning-and-Deploy): rebuild a robot PC from scratch and push code to the robot.
 - [Build-and-Run](https://github.com/r1b4z01d/rd_ws/wiki/Build-and-Run): the colcon build.
 
@@ -48,7 +48,7 @@ rd_ws/
 │   ├── apriltag/               # AprilTag C library (submodule)
 │   ├── apriltag_ros/           # ROS2 AprilTag wrapper (submodule; patched on the Jetson, see provision/patches/)
 │   ├── AprilTag_Detection/     # AprilTag demo package (submodule; its upstream is gone, left empty on new boxes)
-│   ├── foxglove_bridge/        # Foxglove WebSocket bridge (submodule)
+│   ├── foxglove_bridge/        # Foxglove WebSocket bridge (submodule; deprecated)
 │   ├── pyDHgripper/            # DH gripper library (submodule, unused on the robot)
 │   ├── roboclaw_hardware_interface/  # RoboClaw ros2_control HW interface (submodule)
 │   ├── roboclaw_serial/        # RoboClaw serial library (submodule)
@@ -71,7 +71,7 @@ rd_ws/
 │   └── ur_power.py, force_mode.py, make_apriltag_pdf.py, cube.py, examples.py   # UR5e and AprilTag tools
 ├── services/                   # Supervisor units (robot_disco*, robot_face, robot_voice, ollama) + fastdds_no_shm.xml (UDP-only DDS)
 ├── provision/                  # Provisioning kit: provision.sh (phases), jetson/, gpu/, deploy_to_rd.sh, capture_rd_state.sh, patches/, pulse/, setup_*.sh
-├── foxglove_studio/            # Foxglove Studio fork + the docker image/layout (manual-start since 2026-11-01)
+├── foxglove_studio/            # Foxglove Studio fork + docker image/layout (deprecated, manual start)
 ├── rviz/                       # view_robot.rviz
 └── documents/                  # Datasheets (RoboClaw, RPLiDAR, TeraRanger), the AprilTag print sheet, architecture diagram, img/ (page screenshots)
 ```

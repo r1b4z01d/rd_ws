@@ -16,7 +16,7 @@ ros2 launch robot_disco online_async_launch.py            # slam_toolbox instead
 ros2 launch robot_disco navigation_launch.py              # Nav2 (config/nav2_params.yaml, behavior_trees/)
 ros2 launch robot_disco apriltag_relocalization_launch.py # detector + AMCL corrector (see below)
 ros2 launch robot_disco ur5e.launch.py                    # the ROS UR driver, namespaced /ur5e (unit robot_disco_ur5e_driver; not used during VLA runs, which drive the arm over RTDE)
-ros2 launch robot_disco foxglove_bridge_launch.xml        # Foxglove WebSocket bridge, whitelisted topics
+ros2 launch robot_disco foxglove_bridge_launch.xml        # deprecated: Foxglove WebSocket bridge, whitelisted topics
 ros2 launch robot_disco joystick.launch.py                # joy + teleop_twist_joy alone (launch_robot includes it)
 ros2 launch robot_disco rplidar_s1_launch.py | rplidar_s2e_launch.py | rplidar_s1_filter_launch.py | rplidar_s2e_filter_launch.py | velodyne.launch.py | realsense_launch.py | rsp.launch.py
 ```
