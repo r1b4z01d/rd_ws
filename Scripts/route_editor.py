@@ -63,6 +63,9 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import record_path as rp  # noqa: E402  (write_route, quat_of)
+from maps_store import MapsStore, valid_name as valid_map_name  # noqa: E402
+
+MAPS: "MapsStore | None" = None          # the maps folder (set in main): /api/maps, the active map, SLAM requests
 
 STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "off", "scans": {}, "costmaps": {},
                "frame_tf": {},   # frame -> (x, y, yaw) of that frame in the map frame (for grids not published in "map")
@@ -72,7 +75,9 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                "jpeg": {}, "cam_want": {},          # name -> {data, seq, t}; name -> last time a viewer pulled it
                "halted": False,                     # the simulator's halt latch (the robot has no latch: goals are gone)
                "ros_up": False,                     # the ROS node (or the simulator) is running — publishing is possible
-               "voice_listeners": 0}                # subscribers on the voice assistant's run_task topic (0 = nobody would run a task)
+               "voice_listeners": 0,                # subscribers on the voice assistant's run_task topic (0 = nobody would run a task)
+               "map_rev": 0,                        # bumped whenever the served map changes (the pages reload it)
+               "mapping": False, "slam": {}}        # SLAM in progress (the Maps tab): /map from slam_toolbox is served live
 COSTMAP_TOPICS = {"global": "/global_costmap/costmap", "local": "/local_costmap/costmap"}
 # Drawn yellow / green on the map view. The FILTERED scans by default: the laser_filters polygon chain
 # has removed the robot's own body, and these are what the costmaps and AMCL consume (--raw-scans for
@@ -389,8 +394,29 @@ def load_map(yaml_path: Path) -> None:
     buf = io.BytesIO()
     im.save(buf, "PNG")
     STATE["png"] = buf.getvalue()
+    STATE["map_rev"] += 1
     STATE["map"] = {"resolution": float(meta["resolution"]), "origin": [float(meta["origin"][0]), float(meta["origin"][1])],
-                    "width": im.size[0], "height": im.size[1], "name": yaml_path.name, "image": "/map.png"}
+                    "width": im.size[0], "height": im.size[1], "name": yaml_path.name, "image": "/map.png", "rev": STATE["map_rev"]}
+
+
+def serve_grid(msg, name: str) -> None:
+    """Serve a live OccupancyGrid (slam_toolbox's /map while mapping) in place of the file map."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(msg.data, dtype=np.int16).reshape(msg.info.height, msg.info.width)
+    px = np.full(a.shape, 205, np.uint8)             # unknown
+    px[a == 0] = 254                                  # free
+    px[a >= 65] = 0                                   # occupied
+    mid = (a > 0) & (a < 65)
+    px[mid] = (254 - a[mid] * 2.5).astype(np.uint8)
+    im = Image.fromarray(np.flipud(px), "L")          # row 0 of the grid is the bottom of the image
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    STATE["png"] = buf.getvalue()
+    STATE["map_rev"] += 1
+    STATE["map"] = {"resolution": float(msg.info.resolution), "origin": [float(msg.info.origin.position.x), float(msg.info.origin.position.y)],
+                    "width": int(msg.info.width), "height": int(msg.info.height), "name": name, "image": "/map.png", "rev": STATE["map_rev"], "live": True}
 
 
 # --------------------------------------------------------------------------- live pose (optional)
@@ -452,6 +478,24 @@ def ros_pose_thread() -> None:
 
         for name, topic in COSTMAP_TOPICS.items():
             node.create_subscription(OccupancyGrid, topic, _keep_costmap(name), cm_qos)
+        # the nav map topic: while slam_toolbox is mapping (the Maps tab), its growing /map is served live
+        live_map: dict = {}
+        node.create_subscription(OccupancyGrid, "/map", lambda m: live_map.update(msg=m, t=time.time()), cm_qos)
+        slam_clients: dict = {}
+
+        def _slam_call(srv_name, req_msg, timeout=45.0):
+            cl = slam_clients.get(srv_name)
+            if cl is None:
+                raise RuntimeError(f"service {srv_name} unavailable")
+            if not cl.wait_for_service(timeout_sec=3.0):
+                raise RuntimeError(f"{srv_name}: no server (is the SLAM unit running?)")
+            fut = cl.call_async(req_msg)
+            t0 = time.time()
+            while not fut.done():
+                if time.time() - t0 > timeout:
+                    raise RuntimeError(f"{srv_name}: no answer within {timeout:.0f} s")
+                time.sleep(0.05)
+            return fut.result()
         STATE["latest"] = latest                       # raw scans / clouds for /api/cloud.bin
         # ---- 3D view inputs
         from geometry_msgs.msg import PolygonStamped, PoseStamped, PoseWithCovarianceStamped
@@ -585,9 +629,16 @@ def ros_pose_thread() -> None:
             px, py = r * np.cos(ang), r * np.sin(ang)
             return np.stack([t.x + px * math.cos(yaw) - py * math.sin(yaw), t.y + px * math.sin(yaw) + py * math.cos(yaw)], 1)
         STATE["ros"] = "waiting for TF map->base_footprint"
+        live_served_t = 0.0
         while True:
             time.sleep(0.05)
             now_t = time.time()
+            if STATE["mapping"] and live_map.get("t", 0) > live_served_t and now_t - live_served_t > 1.0:
+                try:
+                    serve_grid(live_map["msg"], f"slam:{(STATE['slam'].get('request') or {}).get('name') or 'new'} (live)")
+                    live_served_t = now_t
+                except Exception as e:  # noqa: BLE001
+                    STATE["slam"]["live_error"] = f"{type(e).__name__}: {e}"
             if now_t - last_scan_pub > 0.2:      # ~5 Hz is plenty for a browser
                 last_scan_pub = now_t
                 want = STATE.get("want") or {}
@@ -681,6 +732,28 @@ def ros_pose_thread() -> None:
                 STATE["voice_listeners"] = task_pub.get_subscription_count()
                 while STATE["publish_q"]:
                     req = STATE["publish_q"].pop(0)
+                    if req["type"] == "slam_save":        # the Maps tab: write <path>.pgm/.yaml + .posegraph/.data
+                        res: dict = {}
+                        try:
+                            from slam_toolbox.srv import SaveMap, SerializePoseGraph
+                            if not slam_clients:
+                                slam_clients["save"] = node.create_client(SaveMap, "/slam_toolbox/save_map")
+                                slam_clients["serialize"] = node.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
+                            r1 = SaveMap.Request()
+                            r1.name.data = req["path"]
+                            out1 = _slam_call("save", r1)
+                            res["save_map"] = int(getattr(out1, "result", 0))
+                            r2 = SerializePoseGraph.Request()
+                            r2.filename = req["path"]
+                            out2 = _slam_call("serialize", r2)
+                            res["serialize"] = int(getattr(out2, "result", 0))
+                            if res["save_map"] not in (0, 255):   # slam_toolbox: 0 = ok, 255 = "no map yet" in some versions
+                                res["error"] = f"save_map returned {res['save_map']}"
+                        except Exception as e:  # noqa: BLE001
+                            res["error"] = f"{type(e).__name__}: {e}"
+                        req["result"] = res
+                        req["done"].set()
+                        continue
                     if req["type"] == "task":
                         task_pub.publish(StringMsg(data=json.dumps({k: v for k, v in req.items() if k != "type"})))
                         STATE["published"] = {**req, "t": time.time()}
@@ -819,6 +892,30 @@ def route_files() -> list[str]:
     return sorted(p.name[:-5] for p in HERE.glob("*.yaml") if not p.name.endswith(".raw.yaml"))
 
 
+_route_map_cache: dict = {}
+
+
+def route_maps() -> dict:
+    """route name -> the map it was saved on (None for routes from before maps were tagged)."""
+    out = {}
+    for name in route_files():
+        p = HERE / f"{name}.yaml"
+        try:
+            mt = p.stat().st_mtime
+            if _route_map_cache.get(name, (None,))[0] != mt:
+                m = None
+                with open(p) as f:                       # cheap: the key is top-level, scan the lines
+                    for line in f:
+                        if line.startswith("map:"):
+                            m = line[4:].strip().strip("'\"") or None
+                            break
+                _route_map_cache[name] = (mt, m)
+            out[name] = _route_map_cache[name][1]
+        except OSError:
+            out[name] = None
+    return out
+
+
 def yaw_of_q(o: dict) -> float:
     z, w = float(o.get("z", 0.0)), float(o.get("w", 1.0))
     return math.atan2(2 * w * z, 1 - 2 * z * z)
@@ -832,7 +929,7 @@ def load_route(name: str) -> dict:
         pos, o = w.get("position", {}) or {}, w.get("orientation", {}) or {}
         wps.append({"name": str(w.get("name", "")), "x": float(pos.get("x", 0)), "y": float(pos.get("y", 0)),
                     "yaw": yaw_of_q(o), "post_actions": w.get("post_actions") or [], "pause": float(w.get("pause") or 0)})
-    out = {"name": name, "waypoints": wps, "initial_pose": d.get("initial_pose")}
+    out = {"name": name, "waypoints": wps, "initial_pose": d.get("initial_pose"), "map": d.get("map")}
     raw = HERE / f"{name}.raw.yaml"
     if raw.exists():
         r = yaml.safe_load(open(raw)) or {}
@@ -856,7 +953,7 @@ def save_route(name: str, data: dict) -> str:
         if float(w.get("pause") or 0) > 0:
             entry["pause"] = float(w["pause"])
         wps.append(entry)
-    route = {"waypoints": wps}
+    route = {"waypoints": wps, "map": current_map_name()}       # tagged with the map the robot runs now
     if data.get("initial_pose"):
         route["initial_pose"] = data["initial_pose"]
     p = HERE / f"{name}.yaml"
@@ -1042,12 +1139,22 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/map":
                 self._json(STATE["map"])
             elif u.path == "/api/routes":
-                self._json({"routes": route_files()})
+                self._json({"routes": route_files(), "maps": route_maps(), "current": current_map_name()})
+            elif u.path == "/api/maps":
+                self._json({**MAPS.list(), "current": current_map_name(), "mapping": STATE["mapping"], "slam": STATE["slam"],
+                            "ros_up": STATE["ros_up"], "map_rev": STATE["map_rev"]})
+            elif u.path.startswith("/api/maps/") and u.path.endswith(".png"):
+                name = u.path[len("/api/maps/"):-4]
+                if not valid_map_name(name) or not MAPS.yaml_path(name).exists():
+                    self._json({"error": f"no map {name!r}"}, 404)
+                else:
+                    self._send(200, MAPS.png(name), "image/png")
             elif u.path == "/api/route":
                 self._json(load_route(q["name"]))
             elif u.path == "/api/pose":
                 fresh = STATE["pose"] if time.time() - STATE["pose_t"] < FRAME_HOLD_S else None
-                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"], "ros_up": STATE["ros_up"]})
+                self._json({"pose": fresh, "ros": STATE["ros"], "sim": STATE["sim"], "halted": STATE["halted"], "ros_up": STATE["ros_up"],
+                            "map_rev": STATE["map_rev"], "mapping": STATE["mapping"]})
             elif u.path == "/api/costmap":
                 r = costmap_png(q.get("name", "global"), q.get("color"))
                 self._json(r[1] if r else {"error": "no costmap received yet (is navigation running?)"})
@@ -1089,7 +1196,7 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/tf":
                 self._json({"frames": STATE["frames"], "joints": STATE["joints"], "t": time.time(), "ros": STATE["ros"],
                             "published": STATE["published"], "sim": STATE["sim"], "halted": STATE["halted"],
-                            "tf_debug": STATE.get("tf_debug")})
+                            "tf_debug": STATE.get("tf_debug"), "map_rev": STATE["map_rev"], "mapping": STATE["mapping"]})
             elif u.path == "/api/cloud.bin":
                 name = q.get("name", "velodyne")
                 b = cloud_bin(name, int(q.get("max", CLOUD_BIN_MAX)))
@@ -1185,6 +1292,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if u.path == "/api/landmarks" or u.path.startswith("/api/landmarks/"):
                 self._landmarks_post(u.path, body)
+                return
+            if u.path.startswith("/api/maps/"):
+                self._maps_post(u.path, body)
                 return
             name = q.get("name") or body.get("name") or ""
             if not name or "/" in name or name.startswith("."):
@@ -1282,6 +1392,82 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json({"error": f"unknown landmark action {action!r}"}, 404)
 
+    def _maps_post(self, path: str, body: dict) -> None:
+        """POST /api/maps/<name>/activate · /api/maps/<name>/draw ({png, save_as}) · /api/maps/slam/start ({mode, name})
+        · /api/maps/slam/save ({name}) · /api/maps/slam/stop. Starting / stopping the SLAM and localization
+        units is the manager's job (supervisor); this only keeps the files and talks to slam_toolbox."""
+        name, _, action = path[len("/api/maps/"):].partition("/")
+        if name == "slam":
+            if action == "start":
+                mode, mname = str(body.get("mode") or "new"), str(body.get("name") or "").strip()
+                try:
+                    req = MAPS.set_slam_request(mode, mname)
+                except (ValueError, FileNotFoundError) as e:
+                    self._json({"error": str(e)}, 400)
+                    return
+                STATE["mapping"] = True
+                STATE["slam"] = {"request": req, "started": time.time()}
+                self._json({"ok": True, "request": req})
+                return
+            if action == "save":
+                mname = str(body.get("name") or (STATE["slam"].get("request") or {}).get("name") or "").strip()
+                if not valid_map_name(mname):
+                    self._json({"error": f"bad map name {mname!r}"}, 400)
+                    return
+                if not STATE["ros_up"]:
+                    self._json({"error": "the ROS node is not up"}, 503)
+                    return
+                done = threading.Event()
+                req = {"type": "slam_save", "name": mname, "path": str(MAPS.dir / mname), "done": done, "result": None}
+                STATE["publish_q"].append(req)
+                if not done.wait(60.0):
+                    self._json({"error": "slam_toolbox did not answer within 60 s (is the SLAM unit running?)"}, 504)
+                    return
+                res = req["result"] or {}
+                if res.get("error"):
+                    self._json({"error": res["error"], "detail": res}, 502)
+                    return
+                STATE["slam"]["last_save"] = {**res, "name": mname, "t": time.time()}
+                info = MAPS.info(mname, MAPS.active()) if MAPS.yaml_path(mname).exists() else None
+                self._json({"ok": True, "saved": res, "map": info})
+                return
+            if action == "stop":
+                STATE["mapping"] = False
+                MAPS.clear_slam_request()
+                STATE["slam"] = {k: v for k, v in STATE["slam"].items() if k == "last_save"}
+                active = MAPS.active()
+                if active:
+                    load_map(MAPS.yaml_path(active))           # back to the file map (the live grid goes away)
+                self._json({"ok": True, "active": active})
+                return
+            self._json({"error": f"unknown slam action {action!r}"}, 404)
+            return
+        if not valid_map_name(name) or not MAPS.yaml_path(name).exists():
+            self._json({"error": f"no map {name!r}"}, 404)
+            return
+        if action == "activate":
+            MAPS.set_active(name)
+            if not STATE["mapping"]:
+                load_map(MAPS.yaml_path(name))
+            self._json({"ok": True, "active": name, "map": MAPS.info(name, name),
+                        "note": "restart the localization and navigation units to run on it"})
+            return
+        if action == "draw":
+            import base64
+            png = str(body.get("png") or "")
+            if "," in png and png.startswith("data:"):
+                png = png.split(",", 1)[1]
+            try:
+                info = MAPS.save_drawn(name, base64.b64decode(png), (body.get("save_as") or "").strip() or None)
+            except (ValueError, FileNotFoundError) as e:
+                self._json({"error": str(e)}, 400)
+                return
+            if info["name"] == MAPS.active() and not STATE["mapping"]:
+                load_map(MAPS.yaml_path(info["name"]))    # the pages pick the edit up
+            self._json({"ok": True, "map": info})
+            return
+        self._json({"error": f"unknown map action {action!r}"}, 404)
+
     def _task_post(self, items: list, entry: dict, rest: str, body: dict, stamp: str) -> None:
         """POST /api/landmarks/<id>/tasks (add) · /tasks/<tid> (edit) · /tasks/<tid>/run (hand it to the voice
         assistant: it drives to the landmark and runs the policy). Called under LANDMARKS_LOCK."""
@@ -1345,6 +1531,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802
         u = urlparse(self.path)
         try:
+            if u.path.startswith("/api/maps/"):
+                name = u.path[len("/api/maps/"):]
+                try:
+                    gone = MAPS.delete(name)
+                except PermissionError as e:
+                    self._json({"error": str(e)}, 409)
+                    return
+                except FileNotFoundError as e:
+                    self._json({"error": str(e)}, 404)
+                    return
+                self._json({"ok": True, "deleted": gone})
+                return
             if not u.path.startswith("/api/landmarks/"):
                 self._send(404, b"not found", "text/plain")
                 return
@@ -1384,7 +1582,9 @@ def main() -> int:
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--cam-port", type=int, default=None, metavar="PORT",
                     help="second listener for the camera MJPEG streams (default: --port + 1; 0 = same port)")
-    ap.add_argument("--map", type=Path, default=HERE.parent / "src" / "robot_disco" / "maps" / "zone_one.yaml")
+    ap.add_argument("--map", type=Path, default=None, help="map yaml to serve (default: the active map in --maps-dir)")
+    ap.add_argument("--maps-dir", type=Path, default=HERE.parent / "src" / "robot_disco" / "maps",
+                    help="the robot's map files (<name>.yaml/.pgm, active_map, slam_request.yaml) for /api/maps")
     ap.add_argument("--no-ros", action="store_true", help="do not try to read the robot's pose")
     ap.add_argument("--sim", action="store_true", help="no robot: simulate pose, TF, scans, Velodyne, costmaps, plans, joints "
                     "and the URDF from the map alone (Scripts/sim_robot.py) — develop the pages anywhere")
@@ -1403,6 +1603,13 @@ def main() -> int:
     elif ARGS.raw_scans:
         SCAN_TOPICS.clear()
         SCAN_TOPICS.update(RAW_SCAN_TOPICS)
+    global MAPS
+    MAPS = MapsStore(ARGS.map.parent if ARGS.map else ARGS.maps_dir)
+    if ARGS.map is None:
+        active = MAPS.active()
+        if not active:
+            sys.exit(f"no maps in {MAPS.dir}")
+        ARGS.map = MAPS.yaml_path(active)
     load_map(ARGS.map)
     if ARGS.sim:
         import sim_robot

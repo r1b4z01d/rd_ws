@@ -384,11 +384,23 @@ $("#center").onclick = () => tool("center"); $("#densify").onclick = () => tool(
 function out(t) { $("#out").textContent = t; }
 function setRoute(d, keepHistory) { route = d; route.raw_trace = d.raw_trace || []; sel = -1; dirty = false; $("#savename").value = d.name; if (!keepHistory) clearHistory(); select(-1); }
 async function loadRoute(name) { const d = await fetch(`/api/route?name=${encodeURIComponent(name)}`).then(r => r.json()); if (d.error) { out(d.error); return; } setRoute(d); out(`loaded ${name}.yaml: ${d.waypoints.length} waypoints`); }
-async function loadRoutes() { const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; s.innerHTML = d.routes.map(n => `<option>${n}</option>`).join(""); if (d.routes.includes(cur)) s.value = cur; }
+async function loadRoutes() {
+  const d = await fetch("/api/routes").then(r => r.json()); const s = $("#routes"); const cur = s.value; const maps = d.maps || {};
+  const here = d.routes.filter(n => !maps[n] || maps[n] === d.current), other = d.routes.filter(n => maps[n] && maps[n] !== d.current);
+  const opt = n => `<option value="${n}">${n}${maps[n] ? "" : " (untagged)"}</option>`;
+  s.innerHTML = `<optgroup label="map ${d.current || "?"}">${here.map(opt).join("")}</optgroup>` +
+    (other.length ? `<optgroup label="other maps">${other.map(n => `<option value="${n}">${n} (${maps[n]})</option>`).join("")}</optgroup>` : "");
+  if (d.routes.includes(cur)) s.value = cur;
+}
 let simBadge = "";
 const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;   // false inside a hidden manager tab
 let halted = false;
-async function poll() { if (!onScreen()) { setTimeout(poll, 1000); return; } try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = d.sim ? "SIM · " : ""; halted = !!d.halted; const hb = $("#halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted); } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
+async function reloadMap() {
+  MAP = await fetch("/api/map").then(r => r.json());
+  await new Promise(res => { img.onload = () => { resize(); draw(); res(); }; img.onerror = res; img.src = MAP.image + "?rev=" + MAP.rev; });
+  loadRoutes().catch(() => {});
+}
+async function poll() { if (!onScreen()) { setTimeout(poll, 1000); return; } try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = (d.sim ? "SIM · " : "") + (d.mapping ? "MAPPING · " : ""); halted = !!d.halted; const hb = $("#halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted); if (MAP && d.map_rev && d.map_rev !== MAP.rev && !poll.reloading) { poll.reloading = true; reloadMap().finally(() => { poll.reloading = false; }); } } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
 $("#halt").onclick = async () => { const resume = halted; try { const r = await fetch("/api/halt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume }) }).then(r => r.json()); out(r.error ? `halt failed: ${r.error}` : (resume ? "resumed" : "HALTED: ") + (r.did || []).join(" · ")); } catch (e) { out(`halt failed: ${e}`); } };
 async function pollScans() {
   if (!onScreen()) { setTimeout(pollScans, 1000); return; }

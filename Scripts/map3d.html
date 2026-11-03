@@ -533,7 +533,12 @@ async function loop(fn, ms) {
 
 async function pollTf() {
   const d = await fetch("/api/tf").then((r) => r.json());
-  frames = d.frames || {}; joints = d.joints || {}; simBadge = d.sim ? "SIM · " : "";
+  frames = d.frames || {}; joints = d.joints || {}; simBadge = (d.sim ? "SIM · " : "") + (d.mapping ? "MAPPING · " : "");
+  if (MAP && d.map_rev && d.map_rev !== MAP.rev && !pollTf.reloading) {        // another map activated, or SLAM's live map
+    pollTf.reloading = true;
+    fetch("/api/map").then((r) => r.json()).then((m) => { MAP = m; MAP.image = "/map.png?rev=" + m.rev; if (mapMesh) { scene.remove(mapMesh); mapMesh.geometry.dispose(); }
+      mapMesh = groundPlane(MAP, 0, 0.95); scene.add(mapMesh); setMapTexture(); }).finally(() => { pollTf.reloading = false; });
+  }
   if (d.sim !== isSim) { isSim = !!d.sim; $("#t-cone").hidden = !isSim; $("#sim-panel").hidden = !isSim; }
   stats.tfN++; const now = performance.now(); if (now - stats.tfT > 2000) { stats.tfHz = stats.tfN / ((now - stats.tfT) / 1000); stats.tfN = 0; stats.tfT = now; }
   const bf = frames.base_footprint || frames.base_link;

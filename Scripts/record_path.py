@@ -326,6 +326,8 @@ def write_route(route: dict, path: Path, header: list[str]) -> None:
             lines.append("    post_actions:")
             lines += ["      " + l for l in yaml.safe_dump(w["post_actions"], sort_keys=False, allow_unicode=True,
                                                              default_flow_style=False).rstrip().splitlines()]
+    if route.get("map"):
+        lines.append(f"map: {route['map']}")          # the nav map the waypoints belong to (route_editor.py tags it)
     if route.get("initial_pose"):
         lines += ["initial_pose:"] + ["  " + l for l in yaml.safe_dump(route["initial_pose"], sort_keys=False,
                                                                         default_flow_style=False).rstrip().splitlines()]
