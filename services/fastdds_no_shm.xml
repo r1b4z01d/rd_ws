@@ -22,12 +22,12 @@
     <transport_descriptor>
       <transport_id>udp_only</transport_id>
       <type>UDPv4</type>
-      <!-- children must follow Fast DDS's schema order: maxInitialPeersRange BEFORE interfaceWhitelist, or the
-           whole file is rejected and the process silently runs on the default (SHM + every interface) transports -->
-      <maxInitialPeersRange>64</maxInitialPeersRange>
-      <interfaceWhitelist>
-        <address>127.0.0.1</address>
-      </interfaceWhitelist>
+      <!-- 2026-11-03 02:00: the loopback whitelist tried above was REVERTED. With it, participants only found each
+           other during their initial unicast probes; once the 20 s lease ran out, AMCL's writer dropped every
+           navigation reader and map->odom stopped reaching the controller for good (packet capture: no
+           discovery traffic at all between amcl:7420 and the nav processes). Back to UDP on every interface.
+           Children here must follow Fast DDS's schema order (maxInitialPeersRange before interfaceWhitelist)
+           or the whole file is rejected and the process silently runs on the default transports. -->
     </transport_descriptor>
   </transport_descriptors>
   <participant profile_name="udp_only_participant" is_default_profile="true">
