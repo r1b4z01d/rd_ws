@@ -21,13 +21,13 @@
     #cams figure.cam.dead figcaption { color: #c93c3c; }
   `;
   const H_DEFAULT = 150, H_BIG = 420, H_MIN = 40, H_MAX = 900;
-  window.initCams = function initCams({ view, panel, top = 8 }) {
+  window.initCams = function initCams({ view, panel, top = 8, enabled = null }) {   // enabled(): page-side switch (e.g. map mode only)
     const st = document.createElement("style"); st.textContent = STYLE; document.head.appendChild(st);
     const strip = document.createElement("div"); strip.id = "cams"; strip.style.top = top + "px"; view.appendChild(strip);
     const figs = {}; let cams = [];
     // the manager keeps a hidden tab's iframe alive: with no size we are not on screen, so drop the
     // streams (8 open streams across two hidden-or-not pages would exhaust the connection pool)
-    const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;
+    const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0 && (!enabled || enabled());
     let shown = onScreen();
     setInterval(() => { const now = onScreen(); if (now !== shown) { shown = now; for (const n of Object.keys(figs)) apply(n); } }, 1000);
     const load = (k, dflt) => { try { return JSON.parse(localStorage.getItem(k) || "null") ?? dflt; } catch (e) { return dflt; } };

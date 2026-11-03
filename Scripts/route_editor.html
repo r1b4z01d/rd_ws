@@ -47,6 +47,7 @@
   .modes button { padding: 4px 10px; } .modes button + button { margin-left: 4px; }
   body.map-mode .edit-only { display: none !important; }
   body:not(.map-mode) .map-only { display: none !important; }
+  body:not(.map-mode) #cams { display: none !important; }   /* camera strip: map mode only */
   body:not(.map-mode) .modes { display: none; }       /* the route editor has no Edit / Map / 3D switch: the manager's tabs do that */
   #legend { position: absolute; left: 10px; bottom: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; font-size: 11px; display: none; }
   body.map-mode #legend { display: block; } body.map-mode #help { display: none; }
@@ -57,6 +58,11 @@
 <div id="side">
   <div class="row" style="justify-content:space-between">
     <h1 id="title">Route Editor</h1>
+    <span class="row edit-only" style="gap:4px;width:auto">
+      <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
+      <button id="redo" title="redo (Ctrl/⌘+Shift+Z or Ctrl+Y)">↷ redo</button>
+      <span class="muted" id="histinfo"></span>
+    </span>
     <span class="modes"><button id="mode-edit" class="accent edit-only" title="back to the route editor">Edit</button><button id="mode-map">Map</button><button onclick="location.href='/3d'" title="three.js scene: map, costmaps, Velodyne, URDF robot, plans">3D</button></span>
   </div>
   <div class="row edit-only">
@@ -73,24 +79,19 @@
     <label class="cb"><input type="checkbox" id="clickadd" checked> click adds</label>
     <label class="cb"><input type="checkbox" id="showraw" checked> raw trace</label>
   </div>
-  <div class="row" id="layers">
+  <div class="row map-only" id="layers">
     <label class="cb"><input type="checkbox" class="layer" data-layer="s1"><span class="sw" data-key="s1" style="background:#f5d033"></span>S1</label>
     <label class="cb"><input type="checkbox" class="layer" data-layer="s2e"><span class="sw" data-key="s2e" style="background:#39d353"></span>S2E</label>
     <label class="cb"><input type="checkbox" class="layer" data-layer="velodyne"><span class="sw" data-key="velodyne" style="background:#e85cff"></span>Velodyne</label>
     <label class="cb"><input type="checkbox" id="showroute" checked> route</label>
   </div>
-  <div class="row" id="costmaps">
+  <div class="row map-only" id="costmaps">
     <label class="cb"><input type="checkbox" class="cmlayer" data-cm="global"><span class="sw" data-key="cm_global" style="background:#ff3caa"></span>global costmap</label>
     <label class="cb"><input type="checkbox" class="cmlayer" data-cm="local"><span class="sw" data-key="cm_local" style="background:#8c32ff"></span>local costmap</label>
     <label class="cb">opacity <input id="cmalpha" type="number" min="5" max="100" step="5" value="15" style="width:60px">%</label>
     <label class="cb" title="draw the nav map with its colours inverted (dark free space, light walls)"><input type="checkbox" id="invertmap" checked> invert map</label>
   </div>
-  <div class="muted" id="scaninfo" style="font-size:11px"></div>
-  <div class="row edit-only">
-    <button id="undo" title="undo (Ctrl/⌘+Z)">↶ undo</button>
-    <button id="redo" title="redo (Ctrl/⌘+Shift+Z or Ctrl+Y)">↷ redo</button>
-    <span class="muted" id="histinfo"></span>
-  </div>
+  <div class="muted map-only" id="scaninfo" style="font-size:11px"></div>
   <div class="row edit-only">
     <button id="center" title="record_path.py center: unmarked waypoints to the middle of their corridor (on the saved file)">centre</button>
     <button id="densify" title="record_path.py densify: intermediate waypoints on long legs (on the saved file)">densify</button>
@@ -125,7 +126,7 @@
   <canvas id="c"></canvas>
   <div id="status">loading…</div>
   <div id="maptools" class="map-only"><button id="mt-pan" class="on" title="drag = pan · wheel = zoom">pan</button><button id="mt-goal" title="click the map, drag for the heading, release = publish /goal_pose (the robot drives there)">nav goal</button><button id="mt-init" title="click the map, drag for the heading, release = publish /initialpose">initial pose</button></div>
-  <div id="legend"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; global costmap: <span class="sw" style="background:#ffc8e6"></span>inflated <span class="sw" style="background:#ff3caa"></span>inscribed <span class="sw" style="background:#be0078"></span>lethal &nbsp; local costmap: <span class="sw" style="background:#cdafff"></span>inflated <span class="sw" style="background:#8c32ff"></span>inscribed <span class="sw" style="background:#5500a0"></span>lethal</div>
+  <div id="legend" class="map-only"><span class="sw" style="background:#2ea043"></span>robot &nbsp; <span class="sw" style="background:#f5d033"></span>RPLiDAR S1 (filtered) &nbsp; <span class="sw" style="background:#39d353"></span>RPLiDAR S2E (filtered) &nbsp; <span class="sw" style="background:#e85cff"></span>Velodyne (points 0.1–2 m) &nbsp; <span class="sw" style="background:#4f8cff"></span>route &nbsp; global costmap: <span class="sw" style="background:#ffc8e6"></span>inflated <span class="sw" style="background:#ff3caa"></span>inscribed <span class="sw" style="background:#be0078"></span>lethal &nbsp; local costmap: <span class="sw" style="background:#cdafff"></span>inflated <span class="sw" style="background:#8c32ff"></span>inscribed <span class="sw" style="background:#5500a0"></span>lethal</div>
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script src="/static/cams.js"></script>
@@ -428,7 +429,7 @@ $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => 
   const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
   setMode(mode);
   poll(); pollScans(); pollCostmaps();
-  if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 44 });   // below the map tools
+  if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 44, enabled: () => mode === "map" });   // map mode only, below the map tools
   if (window.initSwatches) initSwatches({ page: "map", apply: (k, hex) => {
     if (k in SCAN_COLORS) SCAN_COLORS[k] = hex;
     else if (k === "cm_global" || k === "cm_local") { const n = k.slice(3); CM_COLORS[n] = hex; if (costmaps[n]) costmaps[n].stamp = null; }
