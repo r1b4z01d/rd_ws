@@ -10,7 +10,7 @@ ROS 2 Python package for Robot Disco's face: a GPU-rendered pair of eyes and a m
 - **Folks page** (`people_web.py`): `http://<robot>:8096/`, the people the robot knows with pictures, editable names, last hello / reset, snap, forget; the VLA manager embeds it as its Folks tab.
 - **Legacy hand relay** (`hand_processing.py`): MediaPipe hand joints to the AmazingHand over TCP (`relay_hand`, `hand_relay_*`); off on the robot, which runs `face_only: true`.
 
-Every setting is a ROS parameter with its defaults in `config/combined_face_hand_defaults.yaml`; the launch file and the supervisor unit load that file. The full parameter tables, the wave's details and the TTS chain are in the workspace README (`../../README.md`, section *robot_face*).
+Every setting is a ROS parameter with its defaults in `config/combined_face_hand_defaults.yaml`; the launch file and the supervisor unit load that file. The full parameter tables, the wave's details and the TTS chain are in the workspace wiki ([Robot-Face](https://github.com/r1b4z01d/rd_ws/wiki/Robot-Face)).
 
 ## Run
 
