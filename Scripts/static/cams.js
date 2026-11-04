@@ -7,6 +7,7 @@
   const STYLE = `
     #cams { position: absolute; right: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; pointer-events: none; }
     #cams figure.cam { margin: 0; background: rgba(0,0,0,.6); border-radius: 6px; padding: 3px; pointer-events: auto; display: flex; flex-direction: column; }
+    #cams figure.cam[hidden] { display: none; }   /* unchecked in the side panel: the flex rule above would otherwise beat the hidden attribute */
     #cams figure.cam figcaption { font-size: 11px; color: #9aa0ad; padding: 2px 3px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; border-radius: 4px; }
     #cams figure.cam figcaption:hover { color: #e8e9ee; background: rgba(255,255,255,.08); }
     #cams figure.cam figcaption::before { content: "▾"; font-size: 10px; width: 8px; }
