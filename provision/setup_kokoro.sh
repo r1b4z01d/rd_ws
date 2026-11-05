@@ -32,11 +32,12 @@ else
   "$VENV/bin/pip" install --upgrade pip
   "$VENV/bin/pip" install kokoro-onnx
   if [ "$(uname -m)" = "aarch64" ]; then
-    # onnxruntime >= 1.20 aborts on Jetson Orin: 1.21+ at import, 1.20.1 when a session runs
-    # (cpuinfo vector assertion; the Orin's CPU topology with offline cores trips it). 1.18.1 is the
-    # newest that synthesises there (verified 2026-10-10, JetPack 6.2 / L4T r36.5, MODE_30W). It is
-    # below kokoro-onnx's declared minimum, which only pip complains about.
-    "$VENV/bin/pip" install "onnxruntime==1.18.1"
+    # Jetson: prefer NVIDIA's onnxruntime-gpu (CUDA) from the Jetson AI Lab index — Kokoro then runs on the
+    # GPU (the face node pins ONNX_PROVIDER=CUDAExecutionProvider for the worker). Fallback: CPU 1.18.1,
+    # the newest PyPI CPU build that does not abort on the Orin (cpuinfo vector assertion in >= 1.20).
+    "$VENV/bin/pip" uninstall -y onnxruntime >/dev/null 2>&1 || true
+    "$VENV/bin/pip" install "onnxruntime-gpu==1.24.0" --index-url https://pypi.jetson-ai-lab.io/jp6/cu126 --extra-index-url https://pypi.org/simple \
+      || "$VENV/bin/pip" install "onnxruntime==1.18.1"
   fi
   for f in kokoro-v1.0.onnx voices-v1.0.bin; do
     [ -s "$MODELS/$f" ] || curl -L -o "$MODELS/$f" "$RELEASE/$f"

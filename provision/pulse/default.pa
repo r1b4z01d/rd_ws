@@ -1,0 +1,9 @@
+# Robot Disco audio policy (user-level PulseAudio config; applies at next login/reboot)
+.include /etc/pulse/default.pa
+# A newly plugged USB audio device must not become the default output — it silenced the robot once.
+.nofail
+unload-module module-switch-on-connect
+# Keep the output awake between utterances; otherwise the first syllable of each sentence is clipped.
+unload-module module-suspend-on-idle
+# Speaker is on the dock USB audio adapter (no Bluetooth).
+set-default-sink alsa_output.usb-C-Media_Electronics_Inc._USB_Audio_Device-00.analog-stereo

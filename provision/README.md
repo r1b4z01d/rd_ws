@@ -69,7 +69,7 @@ Each phase can be run alone and re-run safely, e.g. `provision.sh workspace` aft
 |---|---|
 | `preflight` | must run as `rd` with sudo; warns when the OS is not Ubuntu 22.04 or (x86 script) not amd64; writes the apt/pip/git proxy config when `PROXY` is set |
 | `base` | `apt-packages.txt`; enables ssh, supervisor, docker; hostname; NTP; `/etc/hosts` entries for ur5e/amazinghand/gpu; `AUTHORIZED_KEY` |
-| `ros` | ROS 2 apt repo, `ros-packages.txt`, rosdep; appends to `~/.bashrc`: source Humble + the workspace, `FASTRTPS_DEFAULT_PROFILES_FILE=~/rd_ws/services/fastdds_no_shm.xml` (UDP-only DDS, see *DDS transport*) and `ROS_DOMAIN_ID=0`; realsense udev rules |
+| `ros` | ROS 2 apt repo, `ros-packages.txt`, rosdep; appends to `~/.bashrc`: source Humble + the workspace, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` + `CYCLONEDDS_URI=~/rd_ws/services/cyclonedds.xml` (see *DDS transport*) and `ROS_DOMAIN_ID=0`; realsense udev rules |
 | `groups` | adds `rd` to dialout, video, input, plugdev, audio, docker, render |
 | `udev` | `udev/99-robot-disco.rules` (SpaceMouse hidraw, RealSense, webcams, gamepads) |
 | `sysctl` | UDP receive buffers for the multicast camera stream (same file VLA's installer writes) |
@@ -307,12 +307,28 @@ separate sink input that the voice node ducks to `music_duck` while it listens a
 
 ## DDS transport
 
-Every ROS unit (and rd's shell) sets `FASTRTPS_DEFAULT_PROFILES_FILE=~/rd_ws/services/fastdds_no_shm.xml`:
-Fast DDS over UDPv4 only, no shared-memory transport. With the default SHM+UDP transport, a handful of
-unit restarts in one boot left stale `/dev/shm/fastrtps_*` segments and data silently stopped flowing
-between some processes (Nav2 lost the map frame, AMCL ignored the initial pose; 2026-10-27). If it ever
-happens again anyway: stop all ROS units, `rm /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*`, start them
-in order (base, localization, navigation, the rest), re-seed `/initialpose`.
+Every ROS unit (and rd's shell) uses Cyclone DDS: `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and
+`CYCLONEDDS_URI=file:///home/rd/rd_ws/services/cyclonedds.xml` (localhost-only, unicast discovery, 120
+participant slots). Fast DDS had one real failure mode on this robot: shared-memory segments left stale after
+unit restarts (2026-10-27: Nav2 lost the map frame, AMCL ignored the initial pose; UDP-only fixed that). The
+2026-11-03 switch to Cyclone was made while chasing "controller_server stops receiving AMCL's map->odom", which
+turned out to be a tf2_ros deadlock (0.25.21-0.25.23, geometry2 #992; fixed by `ros-humble-tf2`/`tf2-ros`
+0.25.24, see *tf2 deadlock* below), not DDS. Cyclone stayed because it works. `services/fastdds_no_shm.xml` stays as the fallback:
+put `FASTRTPS_DEFAULT_PROFILES_FILE` back in the units instead of the two Cyclone variables. Cyclone and
+Fast DDS do not interoperate, so switch every unit and shell together. Needs `ros-humble-rmw-cyclonedds-cpp`
+(in `ros-packages.txt`).
+
+## tf2 deadlock (ros-humble-tf2 0.25.21-0.25.23)
+
+Symptom: minutes after a navigation restart, usually while driving, a goal fails with `controller_server`
+logging "Transform data too old when converting from map to odom" every cycle (or "Reached the goal!" at once,
+then the recovery spin runs forever = "the robot keeps turning right"), while AMCL publishes normally and the
+planner still plans. Cause: an ABBA deadlock inside tf2 between the TransformListener thread
+(`testTransformableRequests`) and the costmap's scan `MessageFilter` (`waitForTransform`); the whole TF buffer
+of that process freezes (gdb: two threads parked on two mutexes of the same `tf2_ros::Buffer`). Fixed upstream
+in tf2/tf2_ros 0.25.24 (geometry2 #992 / #990). Keep those two packages at >= 0.25.24 (they are in
+`ros-packages.txt` by name, so a fresh provision gets the current version); any process with a MessageFilter
+(planner, controller, collision monitor) can hit it.
 
 ## Known gaps / things to confirm against the snapshot
 

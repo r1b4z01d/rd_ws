@@ -25,15 +25,18 @@ supervisor
 # docker: installed by provision.sh phase base only when no docker is present (JetPack / Docker CE
 # images already ship one, and docker.io conflicts with containerd.io)
 
-# --- robot_face: audio out (aplay), espeak fallback voice, GL window
+# --- robot_face / robot_voice: audio out (aplay), pactl/parecord/paplay (the voice assistant's ears and
+# volume skill, the face node's default-sink watchdog), espeak fallback voice, GL window
 alsa-utils
+pulseaudio-utils
 espeak
 libglfw3
 libgl1-mesa-dri
 libegl1
 mesa-utils
 
-# --- 2.1 Bluetooth speaker (README "2.1 Bluetooth Audio")
+# --- Bluetooth audio stack (README "2.1 Bluetooth Audio"). Legacy: since 2026-10 the speaker is the dock's
+# C-Media USB adapter and pulse/default.pa (phase audio) keeps it the default sink; harmless to install.
 bluez
 pulseaudio-module-bluetooth
 

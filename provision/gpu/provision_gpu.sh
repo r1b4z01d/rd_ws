@@ -2,14 +2,17 @@
 # Provision the GPU box (training + the VLA web manager): Ubuntu 24.04, RTX 4090, user `bryan`.
 # Idempotent and phased, like ../provision.sh:
 #
-#   ./provision_gpu.sh base venv services          # on the box, after ~/VLA has been pushed (README step 3)
+#   ./provision_gpu.sh base venv services llm      # on the box, after ~/VLA has been pushed (README step 3)
+#   ./provision_gpu.sh llm                         # Ollama (local LLM for the voice assistant) under supervisor, model pulled
 #   ./provision_gpu.sh data                        # pull datasets + checkpoints from RD (needs `ssh RD`)
 #   ./provision_gpu.sh wifi PASSWORD               # join the robot Wi-Fi (not in `all`; password never stored here)
 #   ./provision_gpu.sh extras                      # optional desktop apps (not in `all`)
-#   ./provision_gpu.sh all                         # = base venv services
+#   ./provision_gpu.sh all                         # = base venv services llm
 #
+# preflight (Ubuntu 24.04 check, nvidia-smi must answer, sudo note) runs before any phase.
 # Knobs: SSID (default RobotDisco), WIFI_METRIC (600; Ethernet keeps 100 so the default route stays wired),
-#        VLA_DIR (~/VLA), RD_HOST (RD, an ssh alias), SERVE_RUN/SERVE_STEP (the checkpoint outputs/serve_ckpt points at).
+#        VLA_DIR (~/VLA), RD_HOST (RD, an ssh alias), SERVE_RUN/SERVE_STEP (the checkpoint outputs/serve_ckpt points at),
+#        OLLAMA_MODEL (qwen2.5:7b — must match robot_voice's `ollama_model`).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +22,7 @@ SSID="${SSID:-RobotDisco}"
 WIFI_METRIC="${WIFI_METRIC:-600}"
 SERVE_RUN="${SERVE_RUN:-tigger_bed_1_smolvla}"
 SERVE_STEP="${SERVE_STEP:-020000}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:7b}"
 export PATH="$HOME/.local/bin:$PATH"
 
 say() { printf '\n>>> %s\n' "$*"; }
@@ -82,11 +86,36 @@ phase_services() {
   curl -fsS -o /dev/null -w "web manager http=%{http_code}  (http://$(hostname -I | awk '{print $1}'):8081)\n" localhost:8081/
 }
 
+phase_llm() {
+  say "llm: Ollama under supervisor (:11434 on every NIC) with $OLLAMA_MODEL for the robot's voice assistant"
+  if ! command -v ollama >/dev/null; then
+    # Creates the `ollama` user, /usr/share/ollama/.ollama (the model store) and a systemd unit — see below.
+    curl -fsSL https://ollama.com/install.sh | sh
+  fi
+  # The installer's ollama.service is enabled at boot and would race supervisor's program for :11434.
+  # Supervisor owns the process like every other service on this box; the unit stays installed but off.
+  if systemctl list-unit-files ollama.service 2>/dev/null | grep -q '^ollama.service'; then
+    sudo systemctl disable --now ollama.service
+  fi
+  sudo install -m 644 "$HERE/ollama.conf" /etc/supervisor/conf.d/ollama.conf
+  sudo supervisorctl reread >/dev/null
+  sudo supervisorctl update >/dev/null          # adds + starts a new program, restarts a changed one
+  sudo supervisorctl status ollama | grep -qE 'RUNNING|STARTING' || sudo supervisorctl start ollama
+  local i
+  for i in $(seq 1 30); do curl -fsS localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done
+  curl -fsS localhost:11434/api/version || { echo "ollama is not answering on :11434 — sudo supervisorctl tail ollama" >&2; exit 1; }
+  echo
+  # Pulled through the running server, so the model lands in the ollama user's store. Needs internet (wired NIC).
+  ollama list | grep -q "^${OLLAMA_MODEL}" || ollama pull "$OLLAMA_MODEL"
+  sudo supervisorctl status ollama
+  echo "robot side: ollama_url in rd_ws/src/robot_voice/config/voice_assistant.yaml must list this box ($(hostname -I | xargs | tr ' ' ',')) on :11434"
+}
+
 phase_data() {
   say "data: outputs/ from $RD_HOST (datasets, train runs, evals; ~6 GB)"
   cd "$VLA_DIR"; mkdir -p outputs
-  # serve_ckpt is excluded: on RD it is an absolute symlink under /mnt/data/VLA that means nothing here
-  rsync -a --info=stats1 "$RD_HOST:VLA/outputs/" outputs/ --exclude=serve_ckpt
+  # serve_ckpt is excluded: on RD it is an absolute symlink under /mnt/data/rd_ws/VLA that means nothing here
+  rsync -a --info=stats1 "$RD_HOST:rd_ws/VLA/outputs/" outputs/ --exclude=serve_ckpt
   ln -sfn "$VLA_DIR/outputs/train/$SERVE_RUN/checkpoints/$SERVE_STEP/pretrained_model" outputs/serve_ckpt
   ls outputs/serve_ckpt/ && du -sh outputs
 }
@@ -133,7 +162,7 @@ phase_extras() {
 
 [ $# -gt 0 ] || { sed -n '2,12p' "$0"; exit 1; }
 phases=("$@")
-[ "${1:-}" = all ] && phases=(base venv services)
+[ "${1:-}" = all ] && phases=(base venv services llm)
 phase_preflight
 i=0
 while [ $i -lt ${#phases[@]} ]; do

@@ -1,0 +1,171 @@
+diff -ruN a/apriltag_ros/CMakeLists.txt b/apriltag_ros/CMakeLists.txt
+--- a/apriltag_ros/CMakeLists.txt	2026-11-01 18:50:34
++++ b/apriltag_ros/CMakeLists.txt	2026-11-01 18:51:31
+@@ -10,12 +10,12 @@
+ find_package(tf2_msgs REQUIRED)
+ find_package(tf2_ros REQUIRED)
+ find_package(image_transport REQUIRED)
+-find_package(image_geometry REQUIRED)
+-find_package(cv_bridge REQUIRED)
+ find_package(geometry_msgs REQUIRED)
+ find_package(apriltag_msgs REQUIRED)
+ find_package(Eigen3 REQUIRED)
+-find_package(OpenCV REQUIRED)
++# Linked directly (it used to arrive through cv_bridge's exported targets). No cv_bridge /
++# image_geometry: the apt ones link a different OpenCV on Jetson, see toMono8() in the source.
++find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d)
+ find_package(Threads REQUIRED)
+ find_package(apriltag REQUIRED)
+ 
+@@ -32,8 +32,6 @@
+     "tf2_msgs"
+     "tf2_ros"
+     "image_transport"
+-    "image_geometry"
+-    "cv_bridge"
+     "geometry_msgs"
+     "apriltag_msgs"
+     "Eigen3"
+@@ -43,8 +41,10 @@
+ ament_target_dependencies(AprilTagNode ${DEPENDENCIES})
+ ament_target_dependencies(tag_detector ${DEPENDENCIES})
+ 
+-target_link_libraries(AprilTagNode apriltag::apriltag)
+-target_link_libraries(tag_detector apriltag::apriltag)
++target_include_directories(AprilTagNode PRIVATE ${OpenCV_INCLUDE_DIRS})
++target_include_directories(tag_detector PRIVATE ${OpenCV_INCLUDE_DIRS})
++target_link_libraries(AprilTagNode apriltag::apriltag ${OpenCV_LIBS})
++target_link_libraries(tag_detector apriltag::apriltag ${OpenCV_LIBS})
+ 
+ rclcpp_components_register_nodes(AprilTagNode "AprilTagNode")
+ 
+diff -ruN a/apriltag_ros/include/AprilTagNode.hpp b/apriltag_ros/include/AprilTagNode.hpp
+--- a/apriltag_ros/include/AprilTagNode.hpp	2026-11-01 18:50:35
++++ b/apriltag_ros/include/AprilTagNode.hpp	2026-11-01 18:51:31
+@@ -37,8 +37,6 @@
+ #include <Eigen/Geometry>
+ 
+ // ros
+-#include <cv_bridge/cv_bridge.h>
+-#include <image_geometry/pinhole_camera_model.h>
+ 
+ 
+ // C++ Headers
+@@ -61,7 +59,7 @@
+ #include <apriltag_msgs/msg/april_tag_detection_array.hpp>
+ #include <opencv2/core/core.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+-#include <opencv2/opencv.hpp>
++#include <opencv2/calib3d.hpp>
+ 
+ #include "common/homography.h"
+ 
+diff -ruN a/apriltag_ros/package.xml b/apriltag_ros/package.xml
+--- a/apriltag_ros/package.xml	2026-11-01 18:50:35
++++ b/apriltag_ros/package.xml	2026-11-01 18:51:31
+@@ -15,8 +15,7 @@
+   <depend>tf2_msgs</depend>
+   <depend>tf2_ros</depend>
+   <depend>image_transport</depend>
+-  <depend>image_geometry</depend>
+-  <depend>cv_bridge</depend>
++  <depend>libopencv-dev</depend>
+   <depend>geometry_msgs</depend>
+   <depend>apriltag_msgs</depend>
+   <depend>eigen</depend>
+diff -ruN a/apriltag_ros/src/AprilTagNode.cpp b/apriltag_ros/src/AprilTagNode.cpp
+--- a/apriltag_ros/src/AprilTagNode.cpp	2026-11-01 18:50:35
++++ b/apriltag_ros/src/AprilTagNode.cpp	2026-11-01 18:51:31
+@@ -28,8 +28,6 @@
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include <AprilTagNode.hpp>
+-// C Headers
+-#include <cv_bridge/cv_bridge.h>
+ 
+ // default tag families
+ #include <tag16h5.h>
+@@ -167,24 +165,75 @@
+   }
+ }
+ 
++// 8-bit grey from the usual encodings, done with the one OpenCV this library links against.
++//
++// This used to be cv_bridge::toCvShare(msg, "mono8"). On a Jetson (JetPack 6) the apt
++// ros-humble-cv-bridge and image_geometry are built against Ubuntu's OpenCV 4.5.4 while
++// find_package(OpenCV) resolves to NVIDIA's 4.8.0, so the component loaded two OpenCV runtimes
++// and the cv::Mat cv_bridge handed back aborted the container with
++// "OpenCV(4.8.0) ... error: (-215:Assertion failed) s >= 0 in function 'setSize'"
++// (robotdisco, 2026-11-01). Converting here keeps a single OpenCV in the process.
++static bool toMono8(const sensor_msgs::msg::Image & msg, cv::Mat & mono)
++{
++  const int h = static_cast<int>(msg.height);
++  const int w = static_cast<int>(msg.width);
++  const size_t step = msg.step;
++  if (h <= 0 || w <= 0 || step == 0 || msg.data.size() < step * msg.height) {
++    return false;
++  }
++  // The input Mats are views of the message buffer; the message outlives this call.
++  uint8_t * data = const_cast<uint8_t *>(msg.data.data());
++  const std::string & enc = msg.encoding;
++  if (enc == "mono8" || enc == "8UC1") {
++    mono = cv::Mat(h, w, CV_8UC1, data, step);       // view, no copy (as toCvShare did)
++  } else if (enc == "mono16" || enc == "16UC1") {
++    cv::Mat(h, w, CV_16UC1, data, step).convertTo(mono, CV_8U, 1.0 / 256.0);
++  } else if (enc == "rgb8") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC3, data, step), mono, cv::COLOR_RGB2GRAY);
++  } else if (enc == "bgr8") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC3, data, step), mono, cv::COLOR_BGR2GRAY);
++  } else if (enc == "rgba8") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC4, data, step), mono, cv::COLOR_RGBA2GRAY);
++  } else if (enc == "bgra8") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC4, data, step), mono, cv::COLOR_BGRA2GRAY);
++  } else if (enc == "yuv422_yuy2") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC2, data, step), mono, cv::COLOR_YUV2GRAY_YUY2);
++  } else if (enc == "yuv422") {
++    cv::cvtColor(cv::Mat(h, w, CV_8UC2, data, step), mono, cv::COLOR_YUV2GRAY_UYVY);
++  } else {
++    return false;
++  }
++  return true;
++}
++
+ void AprilTagNode::onCamera(
+   const sensor_msgs::msg::Image::ConstSharedPtr & msg_img,
+   const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg_ci)
+ {
+   // convert to 8bit monochrome image
+-  const cv::Mat img_uint8 = cv_bridge::toCvShare(msg_img, "mono8")->image;
++  cv::Mat img_uint8;
++  if (!toMono8(*msg_img, img_uint8)) {
++    RCLCPP_WARN_ONCE(
++      get_logger(), "Cannot convert image encoding '%s' (%ux%u, step %u) to mono8; no detections",
++      msg_img->encoding.c_str(), msg_img->width, msg_img->height, msg_img->step);
++    return;
++  }
+ 
+   image_u8_t im = {
+     .width = img_uint8.cols,
+     .height = img_uint8.rows,
+-    .stride = img_uint8.cols,
++    .stride = static_cast<int32_t>(img_uint8.step),
+     .buf = img_uint8.data};
+-  image_geometry::PinholeCameraModel camera_model;
+-  camera_model.fromCameraInfo(msg_ci);
+-  double fx = camera_model.fx();  // focal length in camera x-direction [px]
+-  double fy = camera_model.fy();  // focal length in camera y-direction [px]
+-  double cx = camera_model.cx();  // optical center x-coordinate [px]
+-  double cy = camera_model.cy();  // optical center y-coordinate [px]
++
++  // Intrinsics of the (rectified) image: the projection matrix P, which is what
++  // image_geometry::PinholeCameraModel::fx()/cx() returned here; K when P is not filled in.
++  const auto & P = msg_ci->p;
++  const auto & K = msg_ci->k;
++  const bool have_p = P[0] != 0.0 && P[5] != 0.0;
++  double fx = have_p ? P[0] : K[0];  // focal length in camera x-direction [px]
++  double fy = have_p ? P[5] : K[4];  // focal length in camera y-direction [px]
++  double cx = have_p ? P[2] : K[2];  // optical center x-coordinate [px]
++  double cy = have_p ? P[6] : K[5];  // optical center y-coordinate [px]
+ 
+   // detect tags
+   zarray_t * detections = apriltag_detector_detect(td, &im);

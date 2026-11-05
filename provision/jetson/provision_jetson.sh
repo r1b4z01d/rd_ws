@@ -8,7 +8,7 @@
 #   git clone https://github.com/r1b4z01d/rd_ws.git ~/rd_ws
 #   ~/rd_ws/provision/jetson/provision_jetson.sh all
 #   sudo reboot
-#   # copy ~/VLA over (see ../README.md §3), then:
+#   # push the VLA tree (workstation: rd_ws/provision/deploy_to_rd.sh --vla, see ../README.md and the wiki page Provisioning-and-Deploy), then:
 #   ~/rd_ws/provision/jetson/provision_jetson.sh vla infer
 #   ~/rd_ws/provision/jetson/provision_jetson.sh network
 #
@@ -16,16 +16,22 @@
 #   preflight  aarch64 + L4T/JetPack + CUDA checks
 #   base       ../apt-packages.txt + apt-packages-jetson.txt
 #   jetson     power mode MAXN, jetson_clocks at boot, nvidia docker runtime, jtop (new phase)
-#   data       optional second drive (NVMe labelled 'data'): mount it, put ~/VLA, ~/rd_ws and the big
-#              caches on it behind symlinks, order supervisor after the mount (new phase)
+#   data       optional second drive (NVMe labelled 'data'): mount it, put ~/rd_ws (VLA inside it) and the
+#              big caches on it behind symlinks, order supervisor after the mount (new phase)
 #   vla        venv with NVIDIA's CUDA torch wheels, ur_rtde/moderngl from source, lerobot[smolvla]
 #   infer      serve_ckpt symlink + vla_infer_server supervisor unit check (new phase)
+#   vlamove    one-time: a robot set up with ~/VLA beside ~/rd_ws gets the submodule layout, ~/rd_ws/VLA (new phase)
+#   vlacheck   audit: anything on the box still naming the old ~/VLA (new phase)
 #   foxglove   never loads an x86 tarball; builds an arm64 image
-# All other phases (ros, groups, udev, sysctl, workspace, face, services, display, network) are inherited.
+# All other phases (ros, groups, udev, sysctl, workspace, face, audio, services, llm, display, network) are
+# inherited unchanged; "all" = preflight base jetson data ros groups udev sysctl workspace face audio services llm display foxglove.
 #
 # Extra knobs (see ../provision.sh for the shared ones):
 #   JETSON_TORCH=2.8.0 JETSON_TORCHVISION=0.23.0   wheel versions from the Jetson AI Lab index
 #   JETSON_PIP_INDEX=https://pypi.jetson-ai-lab.io/jp6/cu126
+#   CUSPARSELT_VERSION=0.7.1.0                     cuSPARSELt redist tarball installed before torch (phase vla)
+#   NETPLAN_RENDERER=NetworkManager                (phase network; the Jetson desktop runs NetworkManager, so the
+#   NET_GATEWAY=192.168.11.1 NET_DNS=8.8.8.8         address is set with nmcli and these two apply)
 #   SERVE_CKPT=/path/to/pretrained_model          what outputs/serve_ckpt should point at (phase infer)
 #   NVPMODEL=0                                     nvpmodel id (0 = MAXN on Orin dev kits)
 #   DATA_LABEL=data DATA_MOUNT=/mnt/data           filesystem label + mount point of the data drive (phase data)
@@ -42,7 +48,7 @@ NVPMODEL="${NVPMODEL:-0}"
 DATA_LABEL="${DATA_LABEL:-data}"
 DATA_MOUNT="${DATA_MOUNT:-/mnt/data}"
 NETPLAN_RENDERER="${NETPLAN_RENDERER:-NetworkManager}"   # JetPack desktops run NetworkManager
-PHASES="$PHASES jetson data infer"
+PHASES="$PHASES jetson data infer vlamove vlacheck"
 
 phase_preflight() {
   log "Preflight (Jetson)"
@@ -176,9 +182,9 @@ PY
 
 # ---- phase data: an optional second drive holds everything big ------------------------------------
 # The AGX Orin's 64 GB eMMC filled up with datasets, checkpoints and the HF cache (2026-10-26), so a
-# 512 GB NVMe (ext4, label 'data') was fitted. ~/VLA, ~/rd_ws and the two large caches live on it
+# 512 GB NVMe (ext4, label 'data') was fitted. ~/rd_ws (VLA inside it, as rd_ws/VLA) and the two large caches live on it
 # behind SYMLINKS, so every path in this kit, the supervisor confs, the venv shebangs
-# (#!/home/rd/VLA/.venv/bin/python3), the colcon install prefix and the workstation's rsync targets
+# (#!/home/rd/rd_ws/VLA/.venv/bin/python3), the colcon install prefix and the workstation's rsync targets
 # stay /home/rd/... . The fstab entry is nofail (the robot must still boot without the drive), which
 # also means systemd does not order anything after it: a drop-in makes supervisor wait for the mount,
 # otherwise its autostart units would start into empty symlink targets. Idempotent: re-running on a
@@ -203,6 +209,13 @@ data_mount() {
   sudo chmod 755 "$DATA_MOUNT"   # GNOME Disks formats the root 700
 }
 
+# pids whose cwd, exe or an open file is inside $1 — a REAL path, /proc links are resolved (supervisor units,
+# the foxglove docker bind); this script and its subshell are excluded (bash keeps its script file open).
+tree_users() {
+  sudo find /proc -maxdepth 3 -regex '/proc/[0-9]+/\(cwd\|exe\|fd/[0-9]+\)' \( -lname "$1" -o -lname "$1/*" \) 2>/dev/null \
+    | cut -d/ -f3 | grep -vxE "$$|$PPID|$BASHPID" | sort -un | xargs || true
+}
+
 # Put one directory on the data drive behind a symlink. $1 = path in the home, $2 = target on the drive.
 # Already a symlink: verify. Absent: create the target and the link (a fresh box, or a re-provision of
 # a box whose drive already holds the tree). A real directory: copy (rsync -aHAX), checksum-verify,
@@ -224,10 +237,7 @@ data_relocate() {
   if [ -e "$dst" ] && [ -n "$(sudo ls -A "$dst")" ]; then
     die "$src is a real directory and $dst already has content: decide which copy is current and move the other aside, then re-run"
   fi
-  # cwd / exe / open files of any process inside the tree (supervisor units, the foxglove docker bind);
-  # this script and its subshell are excluded (bash keeps its script file open)
-  users="$(sudo find /proc -maxdepth 3 -regex '/proc/[0-9]+/\(cwd\|exe\|fd/[0-9]+\)' \( -lname "$src" -o -lname "$src/*" \) 2>/dev/null \
-           | cut -d/ -f3 | grep -vxE "$$|$PPID|$BASHPID" | sort -un | xargs)"
+  users="$(tree_users "$src")"
   [ -z "$users" ] || die "$src is in use by pid(s) $users ($(ps -o comm= -p "${users// /,}" 2>/dev/null | sort -u | xargs)): stop those units (sudo supervisorctl stop <unit>) and re-run"
   log "moving $src -> $dst ($(du -sh "$src" | cut -f1))"
   sudo mkdir -p "$dst"
@@ -243,7 +253,7 @@ data_dropin() {
   local d=/etc/systemd/system/supervisor.service.d f want
   f="$d/nvme-data.conf"
   want="[Unit]
-# ~/VLA and ~/rd_ws live on $DATA_MOUNT (rd_ws/provision/jetson/provision_jetson.sh data); the fstab entry is
+# ~/rd_ws (VLA inside it) lives on $DATA_MOUNT (rd_ws/provision/jetson/provision_jetson.sh data); the fstab entry is
 # nofail, so order supervisor after the mount explicitly or its units start into empty symlink targets
 RequiresMountsFor=$DATA_MOUNT
 "
@@ -263,8 +273,7 @@ phase_data() {
   (fit a drive, 'sudo mkfs.ext4 -L $DATA_LABEL /dev/nvme0n1p1', then 'provision_jetson.sh data')"
     return 0
   fi
-  data_relocate "$RD_HOME/VLA" "$DATA_MOUNT/VLA"
-  data_relocate "$WS" "$DATA_MOUNT/rd_ws"
+  data_relocate "$WS" "$DATA_MOUNT/rd_ws"                                                      # VLA rides inside
   data_relocate "$RD_HOME/.cache/huggingface" "$DATA_MOUNT/cache/huggingface"               # base VLM + Arrow copies
   data_relocate "$RD_HOME/.cache/robot_descriptions" "$DATA_MOUNT/cache/robot_descriptions" # robot meshes
   data_dropin
@@ -272,13 +281,13 @@ phase_data() {
 }
 
 phase_infer() {
-  local vla="$RD_HOME/VLA"
+  local vla="$WS/VLA"
   log "Local VLA inference server"
   [ -x "$vla/.venv/bin/python" ] || die "run 'provision_jetson.sh vla' first"
   [ -f "$vla/services/rd/vla_infer_server.conf" ] \
     || die "$vla/services/rd/vla_infer_server.conf missing: copy a VLA tree that has it (it is in the VLA repo)"
   # services/rd/ also holds the MANUAL-start apps as units: vla_teleop (recording panel) and vla_eval
-  # (policy eval), each reading its arguments from ~/VLA/config/{teleop,eval}.env — install_services.sh rd
+  # (policy eval), each reading its arguments from ~/rd_ws/VLA/config/{teleop,eval}.env — install_services.sh rd
   # creates those from the .example files on first install and never overwrites them. Start them with
   # `sudo supervisorctl start vla_teleop|vla_eval` or the ▶ buttons on the manager's RobotDisco Teleop
   # tab (which needs the GPU box's ssh key authorized for rd@<this box>). They need the X display of
@@ -293,9 +302,9 @@ phase_infer() {
   through the workstation, pretrained_model only) and point the symlink at it:
   # workstation:
   ssh GPU 'cd VLA/outputs/train && tar cf - <run>/capture.json <run>/checkpoints/<step>/pretrained_model' \\
-    | ssh RD 'tar xf - -C VLA/outputs/train'
+    | ssh RD 'tar xf - -C rd_ws/VLA/outputs/train'
   # here:
-  ln -sfn ~/VLA/outputs/train/<run>/checkpoints/<step>/pretrained_model ~/VLA/outputs/serve_ckpt"
+  ln -sfn ~/rd_ws/VLA/outputs/train/<run>/checkpoints/<step>/pretrained_model ~/rd_ws/VLA/outputs/serve_ckpt"
   fi
   # SmolVLA checkpoints only hold the action expert; the base VLM (config.json: vlm_model_name) is
   # loaded from the HuggingFace cache, and the unit runs with HF_HUB_OFFLINE=1 because the robot
@@ -313,7 +322,108 @@ phase_infer() {
   (cd "$vla" && sudo ./scripts/install_services.sh rd)
   sudo supervisorctl status vla_infer_server || true
   log "Start it with: sudo supervisorctl start vla_infer_server
-Then on this same box:  ~/VLA/run.sh scripts/eval_hw.py --remote 127.0.0.1:8777 --cameras udp --fps 12"
+Then on this same box:  ~/rd_ws/VLA/run.sh scripts/eval_hw.py --remote 127.0.0.1:8777 --cameras udp --fps 12"
+}
+
+# ---- phase vlamove: the VLA tree becomes rd_ws/VLA (one-time, VLA is a submodule of rd_ws since 2026-11-02) --
+# Until then the robot had two trees, ~/VLA and ~/rd_ws (both symlinks onto the data drive). VLA is now the
+# rd_ws/VLA submodule, so the robot's copy moves to ~/rd_ws/VLA and ~/VLA goes away — no compatibility link.
+# One rename on the NVMe (same filesystem) keeps the 8 GB of outputs in place. The venv cannot be rebuilt
+# here (no internet), so its absolute shebangs are patched in place. The unit files in the tree must already
+# say /home/rd/rd_ws/VLA: push the rewritten tree first (for this one-time move, into the OLD ~/VLA:
+# `rsync -a --exclude .git --exclude '.venv*' --exclude outputs --exclude log --exclude config VLA/ RD:VLA/`
+# from rd_ws on the workstation). Idempotent: a second run reports "(already)" and only re-audits.
+VLA_UNITS="vla_cameras vla_camera_ros_bridge vla_infer_server vla_webui vla_teleop vla_eval"
+
+phase_vlamove() {
+  local old="$RD_HOME/VLA" new="$WS/VLA" src="" new_real venv u users t stale
+  log "VLA tree -> $new (rd_ws submodule layout, no compatibility link)"
+  cd "$RD_HOME"                                   # never inside a tree about to move
+  [ -d "$WS" ] || die "$WS is missing"
+  new_real="$(readlink -f "$WS")/VLA"
+  # 1. where it is: the live layout, a run that died after unlinking ~/VLA, or already done
+  if [ -L "$old" ] || [ -d "$old" ]; then src="$(readlink -f "$old")"
+  elif [ -d "$DATA_MOUNT/VLA" ]; then src="$DATA_MOUNT/VLA"; fi
+  if [ -z "$src" ]; then
+    [ -d "$new/ur5e_lerobot" ] || die "no VLA tree at $old, $DATA_MOUNT/VLA or $new"
+    log "$new (already)"
+  else
+    # 2. guards
+    [ -d "$src/ur5e_lerobot" ] || die "$src does not look like the VLA tree"
+    [ "$src" != "$new_real" ] || die "$old already points at $new_real: just remove the link"
+    if [ -e "$new_real" ] && [ -n "$(ls -A "$new_real")" ]; then
+      die "$new_real exists and is not empty: decide which copy is current, move the other aside, re-run"
+    fi
+    [ "$(stat -c %d "$src")" = "$(stat -c %d "$(dirname "$new_real")")" ] \
+      || die "$src and $(dirname "$new_real") are on different filesystems (mv would copy $(du -sh "$src" | cut -f1)): rsync by hand"
+    stale="$(grep -L "/home/$RD_USER/rd_ws/VLA" "$src"/services/rd/*.conf 2>/dev/null | xargs)"
+    [ -z "$stale" ] || die "unit files still carry the old path (push the rewritten VLA tree first): $stale"
+    # 3. nothing may run from the tree
+    for u in $VLA_UNITS; do sudo supervisorctl stop "$u" >/dev/null 2>&1 || true; done
+    users="$(tree_users "$src")"
+    [ -z "$users" ] || die "$src is in use by pid(s) $users ($(ps -o comm= -p "${users// /,}" 2>/dev/null | sort -u | xargs)): stop them and re-run"
+    # 4. the installed confs, for a rollback
+    if [ ! -d /etc/supervisor/conf.d.pre-vlamove ]; then
+      sudo mkdir -p /etc/supervisor/conf.d.pre-vlamove
+      sudo cp /etc/supervisor/conf.d/vla_*.conf /etc/supervisor/conf.d.pre-vlamove/ 2>/dev/null || true
+    fi
+    # 5. the move: one rename (-T: never INTO an existing directory)
+    [ -d "$new_real" ] && sudo rmdir "$new_real"   # an empty placeholder only
+    sudo mv -T "$src" "$new_real"
+    [ -L "$old" ] && rm "$old"
+    log "moved $src -> $new_real ($old removed)"
+  fi
+  # 6. the venv: the console scripts' shebang lines, the activate scripts, pyvenv.cfg
+  venv="$new/.venv"
+  [ -x "$venv/bin/python" ] || die "$venv missing: run 'provision_jetson.sh vla'"
+  find "$venv/bin" -maxdepth 1 -type f -print0 \
+    | xargs -0 grep -lIZ -- "^#!$old/\.venv/bin/" 2>/dev/null \
+    | xargs -0 -r sed -i "1s|^#!$old/\.venv/bin/|#!$new/.venv/bin/|"
+  for t in bin/activate bin/activate.csh bin/activate.fish bin/Activate.ps1 pyvenv.cfg; do
+    [ -f "$venv/$t" ] && sed -i "s|$old/\.venv|$new/.venv|g" "$venv/$t"
+  done
+  "$venv/bin/pip" --version >/dev/null || die "console-script shebang still broken: $(head -1 "$venv/bin/pip")"
+  grep -rlI --include='*.pth' --include='*.egg-link' --include='direct_url.json' --include='__editable__*' -- "$old/" "$venv/lib" 2>/dev/null \
+    | sed 's/^/  still holds the old path (an editable install?): /' || true
+  # 7. absolute links inside the tree: serve_ckpt becomes relative so it never breaks again
+  t="$(readlink "$new/outputs/serve_ckpt" 2>/dev/null || true)"
+  case "$t" in
+    "$old"/outputs/*|"$src"/outputs/*)   # the link may hold the resolved (/mnt/data) path as well as ~/VLA
+      t="${t#"$old"/outputs/}"; t="${t#"$src"/outputs/}"
+      ln -sfn "$t" "$new/outputs/serve_ckpt"; log "serve_ckpt -> $t (relative)" ;;
+    "$old"/*)         ln -sfn "$new/${t#"$old"/}" "$new/outputs/serve_ckpt" ;;
+  esac
+  [ -z "$t" ] || [ -e "$new/outputs/serve_ckpt" ] || warn "outputs/serve_ckpt -> $(readlink "$new/outputs/serve_ckpt") dangles"
+  find "$new" -path "$venv" -prune -o -type l \( -lname "$old/*" -o -lname "$src/*" \) -print 2>/dev/null | sed 's/^/  stale link: /' || true
+  # 8. the units from the rewritten confs: update autostarts vla_cameras + vla_camera_ros_bridge from the new path
+  (cd "$new" && sudo ./scripts/install_services.sh rd)
+  sudo supervisorctl status | grep -E '^vla_' || true
+  log "manual units stay stopped: sudo supervisorctl start vla_infer_server | vla_teleop | vla_eval"
+  # 9. the rd_ws units that hold the path (robot_voice's vla_dir, the face's home-pose file, path.py's VLA_DIR)
+  #    read it from their rewritten sources on restart
+  for u in robot_voice robot_face robot_disco_route_editor; do
+    sudo supervisorctl status "$u" 2>/dev/null | grep -q RUNNING && { sudo supervisorctl restart "$u" | tail -1 || true; }
+  done
+  phase_vlacheck
+}
+
+# Audit: everything on this box that still names the old tree. Prints the offenders; nothing = clean.
+phase_vlacheck() {
+  local pat="(/home/$RD_USER|~|\\\$HOME)/VLA([^[:alnum:]_.-]|\$)" new="$WS/VLA"
+  log "old-path audit: $pat"
+  {
+    sudo grep -nE "$pat" /etc/supervisor/conf.d/*.conf /etc/systemd/system/supervisor.service.d/*.conf 2>/dev/null
+    grep -rIlE "$pat" "$new/.venv/bin" 2>/dev/null
+    grep -rIlE --include='*.pth' --include='*.egg-link' --include='*.json' --include='*.cfg' --include='*.txt' "$pat" "$new/.venv/lib" 2>/dev/null
+    grep -rInE --exclude-dir='.venv*' --exclude-dir=outputs --exclude-dir=log --exclude-dir=__pycache__ --exclude-dir=.git "$pat" "$new" 2>/dev/null
+    grep -rInE --include='*.json' --include='*.env' "$pat" "$new/config" "$new/outputs/evals" 2>/dev/null
+    grep -nE "$pat" "$RD_HOME/.bashrc" "$RD_HOME/.profile" "$RD_HOME/start_face.sh" 2>/dev/null
+    crontab -l 2>/dev/null | grep -nE "$pat"
+    grep -rInE --exclude-dir=__pycache__ "$pat" "$WS/Scripts" "$WS/src/robot_voice" "$WS/src/robot_face" "$WS/src/robot_disco/scripts" "$WS/services" 2>/dev/null
+  } | sed 's/^/  /' || true
+  [ -e "$RD_HOME/VLA" ] && warn "$RD_HOME/VLA still exists"
+  [ -e "$DATA_MOUNT/VLA" ] && warn "$DATA_MOUNT/VLA still exists"
+  return 0
 }
 
 phase_foxglove() {
@@ -336,8 +446,8 @@ phase_foxglove() {
 }
 
 phase_all() {
-  for p in preflight base jetson data ros groups udev sysctl workspace face services display foxglove; do "phase_$p"; done
-  log "Done. Next: reboot, copy ~/VLA, then 'provision_jetson.sh vla infer' and finally 'provision_jetson.sh network'."
+  for p in preflight base jetson data ros groups udev sysctl workspace face audio services llm display foxglove; do "phase_$p"; done
+  log "Done. Next: reboot, push the VLA tree (workstation: provision/deploy_to_rd.sh --vla), then 'provision_jetson.sh vla infer' and finally 'provision_jetson.sh network'."
 }
 
 dispatch "$@"
