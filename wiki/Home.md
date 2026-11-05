@@ -60,7 +60,7 @@ rd_ws/
 │   ├── *.yaml, *.svg           #   routes (waypoints.yaml, tigger_route.yaml, …) and their recorded traces
 │   ├── install_services.sh     #   installs services/*.conf into supervisor
 │   └── ur_power.py, force_mode.py, make_apriltag_pdf.py, cube.py, examples.py   # UR5e and AprilTag tools
-├── services/                   # Supervisor units (robot_disco*, robot_face, robot_voice, ollama) + fastdds_no_shm.xml (UDP-only DDS)
+├── services/                   # Supervisor units (robot_disco*, robot_face, robot_voice, ollama) + cyclonedds.xml (Cyclone DDS config; fastdds_no_shm.xml = fallback)
 ├── provision/                  # Provisioning kit: provision.sh (phases), jetson/, gpu/, deploy_to_rd.sh, capture_rd_state.sh, patches/, pulse/, setup_*.sh
 ├── foxglove_studio/            # Foxglove Studio fork + docker image/layout (deprecated, manual start)
 ├── rviz/                       # view_robot.rviz

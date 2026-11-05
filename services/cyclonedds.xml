@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cyclone DDS config for every ROS process on the robot (RMW_IMPLEMENTATION=rmw_cyclonedds_cpp, set in each
+     supervisor unit in services/*.conf and in rd's shell via provision.sh).
+
+     History: Cyclone was adopted 2026-11-03 while chasing "controller_server stops receiving AMCL's map->odom".
+     That turned out NOT to be DDS at all: it was a lock-order deadlock inside tf2_ros 0.25.21-0.25.23
+     (geometry2 #992, fixed in 0.25.24: the TF listener thread and the costmap's scan MessageFilter each held
+     one of tf2's mutexes and waited for the other, freezing the whole TF buffer of that process; gdb showed it).
+     Cyclone stayed because it works and keeps DDS on loopback; services/fastdds_no_shm.xml remains the fallback.
+
+     Every ROS process runs on this host (the manager and the GPU box talk HTTP), so DDS stays on loopback:
+     no multicast, discovery by unicast to localhost. MaxAutoParticipantIndex must exceed the number of
+     participants on the host (about 20 plus the CLI tools); the default of 9 would starve the later ones.
+     Needs EVERY ROS unit restarted together, and rd's shells re-opened: Cyclone and Fast DDS do not talk to each other.
+     Roll back by putting FASTRTPS_DEFAULT_PROFILES_FILE back in the units instead of the two Cyclone variables. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="lo" multicast="false"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="localhost"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

@@ -74,7 +74,7 @@ params_file:=/home/rd/rd_ws/src/robot_disco/config/collision_monitor_params.yaml
 
 The ROS units share these settings:
 - `ROS_DOMAIN_ID=0`
-- `FASTRTPS_DEFAULT_PROFILES_FILE=/home/rd/rd_ws/services/fastdds_no_shm.xml`: a UDP-only Fast DDS profile (no shared-memory transport). Stale SHM segments after restarts silently cut data between processes (Nav2 lost the map frame, AMCL ignored `/initialpose`); the profile is also exported in `~/.bashrc` so a shell's `ros2` sees the same traffic
+- `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and `CYCLONEDDS_URI=file:///home/rd/rd_ws/services/cyclonedds.xml`: Cyclone DDS, localhost-only (replaced Fast DDS 2026-11-03 while chasing what turned out to be a tf2_ros deadlock, see provision/README.md *tf2 deadlock*; `fastdds_no_shm.xml` is the fallback). Fast DDS had a UDP-only profile (no shared-memory transport). Stale SHM segments after restarts silently cut data between processes (Nav2 lost the map frame, AMCL ignored `/initialpose`); the profile is also exported in `~/.bashrc` so a shell's `ros2` sees the same traffic
 - Working directory `/home/rd/rd_ws`, user `rd` (Ollama runs as `ollama`, Foxglove Studio from `foxglove_studio/`)
 - `stopasgroup=true`, `killasgroup=true` — ensures all child processes are cleaned up
 - Log rotation: 20 MB max, 2 backups per service (5 MB for the route editor)
