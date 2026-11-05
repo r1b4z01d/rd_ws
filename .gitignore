@@ -47,3 +47,9 @@ __pycache__
 
 # the robot's landmark photos (route_editor.py Landmarks API; the YAML next to them is tracked)
 Scripts/landmarks/img/
+
+# live-robot snapshots from provision/capture_rd_state.sh (maps, galleries, music, docker image)
+provision/snapshot-*/
+
+# Fusion 360 exports of the robot (f3z/step/stl/obj, 250 MB; the obj is over GitHub's 100 MB limit) — not used by anything, keep them out
+URDF.*
