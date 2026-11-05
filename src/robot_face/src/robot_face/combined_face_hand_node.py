@@ -28,15 +28,20 @@ from cv_bridge import CvBridge, CvBridgeError
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
-from std_msgs.msg import Float32, Float32MultiArray, String
+from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from std_srvs.srv import Trigger
 
+from .audio_sink import SinkWatchdog, player_env
 from .audio_utils import chunk_level, iter_chunks, load_wav_mono, prepend_silence, write_wav_mono16
 from .face_id import FaceIdentifier
+from .people_web import PeopleWebServer
 from .gl_eye_renderer import GlEyeRenderer
 from .mouth_gestures import gesture_duration, gesture_frame, pick_gesture
 from .tts_engines import EspeakTTS, KokoroTTS
+from .ur_dashboard import UrDashboard
+from .ur_motion import UrMotion, parse_order
+from .hand_wiggle import HandWiggle
 from .face_utils import box_top_center, pick_face, pose_box_from_landmarks, schedule_blink
 from .hand_processing import JOINT_OPEN_OFFSETS, format_joint_command, generate_joint_offsets
 from .window_utils import (
@@ -62,6 +67,10 @@ class FaceHandNode(Node):
             "",
             [
                 ("image_topic", "/camera/camera/color/image_raw"),
+                ("fullscreen", True),              # start fullscreen; a click or F toggles
+                ("window_focus_seconds", 10.0),    # keep asking GNOME to focus the window this long after start
+                ("render_fps", 30.0),              # face animation rate, independent of the camera
+                ("camera_timeout", 3.0),           # seconds without frames before the face stops expecting a person
                 ("face_only", False),
                 ("hand_in_eyes", False),
                 ("mirror", False),
@@ -70,10 +79,10 @@ class FaceHandNode(Node):
                 ("fps", 30.0),
                 ("relay_hand", False),
                 ("hand_hotkey", "ctrl+shift+h"),
-                ("hand_host", "192.168.1.194"),
-                ("hand_port", 8765),
+                ("hand_relay_host", "192.168.11.117"),   # the hand's ESP32, TCP line protocol (:8765): the hand-tracking relay only
+                ("hand_relay_port", 8765),                #   (hand_host / hand_port / hand_speed below are the wave's UDP wiggle)
                 ("hand_rate", 20.0),
-                ("hand_speed", 1000),
+                ("hand_relay_speed", 1000),
                 ("hand_panel_height", 400),
                 ("hand_panel_fraction", 0.5),
                 ("hand_panel_scale", 1.0),
@@ -81,6 +90,9 @@ class FaceHandNode(Node):
                 ("blink_max", 15.5),
                 ("blink_duration", 0.18),
                 ("blink_closed_hold", 0.04),
+                ("wink_eye", "right"),             # which eye winks (screen left / right)
+                ("wink_duration", 0.7),            # whole wink: close, hold, open (s)
+                ("wink_depth", 0.9),               # how far the eye closes: 1.0 shut, 0.9 leaves a sliver open
                 ("gaze_speed", 0.3),
                 ("gaze_idle_speed", 0.01),
                 ("mouth_enabled", True),
@@ -105,6 +117,31 @@ class FaceHandNode(Node):
                 ("greeting_wait", 2.0),
                 ("greeting_name_window", 10.0),
                 ("greeting_happy_seconds", 30.0),
+                ("greeting_cooldown", 3600.0),     # seconds before the same recognised person is greeted again (0 = every visit)
+                ("ur_wave_enabled", True),         # play a pendant program on the UR arm when someone is recognised
+                ("ur_ip", "192.168.11.21"),
+                ("ur_wave_program", "wave.urp"),   # program saved on the teach pendant (/programs)
+                ("ur_wave_cooldown", 20.0),        # seconds between waves
+                ("ur_wave_known_only", True),      # only for people recognised by name (false: every hello)
+                ("ur_wave_source", "auto"),        # auto (recording if present, else pendant program) | recording | dashboard
+                ("ur_wave_motion_file", "~/.robot_face/motions/wave.json"),   # from scripts/ur_record_motion.py
+                ("ur_wave_return", "home"),        # after the wave: home (VLA's home pose) | start (where it was) | none
+                ("ur_wave_home_file", "~/.robot_face/motions/home.json,~/rd_ws/VLA/outputs/home_pose.json"),   # first existing wins: the wave's forward home (ur_record_motion.py --capture-home), else the eval's
+                ("ur_wave_approach_order", ""),           # joint stages home -> wave pose (scripts/ur_path_eval.py); "" = all at once
+                ("ur_wave_return_order", ""),             # joint stages wave pose -> home
+                ("ur_wave_retrace", True),                # a take that starts at home but ends elsewhere returns along its own samples, backwards
+                ("ur_wave_retrace_speedup", 1.5),         # playback speed of that retrace (1 = as demonstrated)
+                ("hand_wiggle_enabled", True),            # AmazingHand: ripple the fingers while the arm waves (thumb still)
+                ("hand_host", "192.168.11.117"),          # the hand's ESP32 on the robot WiFi (UDP line protocol)
+                ("hand_port", 8766),
+                ("hand_speed", 500),                      # firmware J: speed (50..2000)
+                ("hand_wiggle_hz", 0.5),                  # finger ripples per second
+                ("hand_wiggle_curl", 0.333),              # how far the fingers close (0 open .. 1 closed): 2/3 open
+                ("hand_thumb_curl", 0.0),                 # the thumb's fixed curl during the wave
+                ("hand_wiggle_phase", 0.25),              # fraction of a period between neighbouring fingers (the wave runs index -> ring)
+                ("ur_wave_power_up", True),        # IDLE / protective stop: run the eval's arm startup first (power on, brake release)
+                ("audio_sink", "C-Media"),         # speaker: PulseAudio sink name or fragment; kept as the default sink while present ("" = leave the default alone)
+                ("audio_sink_check", 5.0),         # seconds between default-sink checks
                 ("speech_lead_silence", 1.5),
                 ("speech_lead_level", 0.01),
                 ("tts_engine", "auto"),            # auto | kokoro | coqui | espeak
@@ -113,14 +150,25 @@ class FaceHandNode(Node):
                 ("tts_lang", "auto"),              # auto = from voice prefix; or en-us, en-gb, es, fr-fr, hi, it, ja, pt-br, cmn
                 ("kokoro_python", "~/.robot_face/kokoro-venv/bin/python"),
                 ("kokoro_model_dir", "~/.robot_face/kokoro"),
+                ("tracker", "auto"),               # auto | face (SCRFD detector on every frame, GPU) | pose (MediaPipe)
                 ("face_id_enabled", True),
-                ("face_id_models_dir", ""),
-                ("face_id_gallery", "~/.robot_face/people.json"),
+                ("face_id_backend", "auto"),       # auto | arcface (SCRFD+ArcFace, own venv) | opencv (YuNet+SFace)
+                ("face_id_python", "~/.robot_face/faceid-venv/bin/python"),
+                ("face_id_arcface_model", "buffalo_l"),
+                ("face_id_det_size", 640),         # SCRFD input size (full frames on the GPU; 320 for a CPU head-crop)
+                ("face_id_gpu", True),             # CUDAExecutionProvider for the worker when available
+                ("face_id_models_dir", ""),        # OpenCV back-end models ("" = share/robot_face/models)
+                ("face_id_gallery", "~/.robot_face/people.json"),   # ArcFace uses people.arcface.json
+                ("face_thumb_dir", "~/.robot_face/faces"),       # one face picture per person (for the Folks page)
+                ("people_web_enabled", True),      # serve the Folks page (known people, editable names)
+                ("people_web_port", 8096),
                 ("face_id_interval", 3),
-                ("face_id_match_threshold", 0.363),
+                ("face_id_min_period", 0.5),       # seconds between identification (embedding) passes
+                ("face_id_threads", 2),            # onnxruntime threads for the ArcFace worker (it spins otherwise)
+                ("face_id_match_threshold", 0.0),  # 0 = back-end default (SFace 0.363, ArcFace 0.45)
                 ("face_id_auto_enroll", True),
                 ("face_id_min_face_px", 40),
-                ("face_id_unknown_threshold", 0.28),
+                ("face_id_unknown_threshold", 0.0),  # 0 = back-end default (SFace 0.28, ArcFace 0.30)
                 ("face_id_enroll_min_face_px", 64),
                 ("face_id_enroll_frames", 6),
                 ("save_raw_video", "/tmp/raw_camera.mp4"),
@@ -150,7 +198,12 @@ class FaceHandNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self.create_subscription(Image, p("image_topic"), self.image_callback, qos)
+        self._image_topic = str(p("image_topic"))
+        img_type = CompressedImage if self._image_topic.rstrip("/").endswith("compressed") else Image
+        self.create_subscription(img_type, self._image_topic, self.image_callback, qos)
+        self._last_frame_time = 0.0
+        self._camera_warned = False
+        self._start_mono = time.monotonic()
 
         # Hand relay state
         self.hand_stream_enabled = bool(p("relay_hand")) and not self.face_only
@@ -158,7 +211,7 @@ class FaceHandNode(Node):
         self.global_hotkey_supported = supports_global_hotkeys()
         self.hand_stream_toggle_active = False
         self.hotkey_prev_state = False
-        self.hand_target_speed = int(min(max(int(p("hand_speed")), 50), 2000))
+        self.hand_target_speed = int(min(max(int(p("hand_relay_speed")), 50), 2000))
         self.hand_socket: Optional[socket.socket] = None
         self.last_hand_send = 0.0
         self.hand_send_interval = 1.0 / max(float(p("hand_rate")), 1e-5)
@@ -229,6 +282,9 @@ class FaceHandNode(Node):
             mouth_gap=float(p("mouth_gap")),
             mouth_hw=(mouth_width / 2.0) if mouth_width > 0 else None,
             mouth_amp=float(p("mouth_amplitude")),
+            fullscreen=bool(p("fullscreen")),
+            grab_focus_seconds=float(p("window_focus_seconds")),
+            log=self.get_logger(),
         )
 
         if self.mouth_enabled:
@@ -277,6 +333,35 @@ class FaceHandNode(Node):
         self.greeting_wait = max(float(p("greeting_wait")), 0.0)
         self.greeting_name_window = max(float(p("greeting_name_window")), 0.0)
         self.greeting_happy_seconds = float(p("greeting_happy_seconds"))
+        self.greeting_cooldown = max(float(p("greeting_cooldown")), 0.0)
+        self.wink_eye_index = 0 if str(p("wink_eye")).strip().lower().startswith("l") else 1
+        self.wink_duration = max(float(p("wink_duration")), 0.2)
+        self.wink_depth = max(0.0, min(float(p("wink_depth")), 1.0))
+        self.wink_start_time: Optional[float] = None
+        self._cooldown_logged_for: Optional[str] = None   # person id whose skipped hello was logged this visit
+        self.ur_wave_enabled = bool(p("ur_wave_enabled"))
+        self.ur_wave_program = str(p("ur_wave_program"))
+        self.ur_wave_cooldown = max(float(p("ur_wave_cooldown")), 0.0)
+        self.ur_wave_known_only = bool(p("ur_wave_known_only"))
+        self.ur_wave_source = str(p("ur_wave_source"))
+        self.ur_wave_motion_file = str(p("ur_wave_motion_file"))
+        self.ur = UrDashboard(str(p("ur_ip")), log=lambda m: self.get_logger().info(m))
+        self.ur_wave_power_up = bool(p("ur_wave_power_up"))
+        self.audio_sink = str(p("audio_sink"))
+        self.sink_watchdog = SinkWatchdog(self.audio_sink, float(p("audio_sink_check")),
+                                          log=lambda m: self.get_logger().info(m))
+        self.sink_watchdog.start()
+        self.ur_motion = UrMotion(str(p("ur_ip")), log=lambda m: self.get_logger().info(m),
+                                  return_to=str(p("ur_wave_return")), home_file=str(p("ur_wave_home_file")),
+                                  approach_order=str(p("ur_wave_approach_order")), return_order=str(p("ur_wave_return_order")),
+                                  retrace=bool(p("ur_wave_retrace")), retrace_speedup=float(p("ur_wave_retrace_speedup")),
+                                  auto_power_up=self.ur_wave_power_up)
+        self._last_wave = 0.0
+        self.hand_wiggle_enabled = bool(p("hand_wiggle_enabled"))
+        self.hand_wiggle = HandWiggle(str(p("hand_host")), int(p("hand_port")), speed=int(p("hand_speed")),
+                                      hz=float(p("hand_wiggle_hz")), curl=float(p("hand_wiggle_curl")),
+                                      thumb=float(p("hand_thumb_curl")), phase=float(p("hand_wiggle_phase")),
+                                      log=lambda m: self.get_logger().info(m))
         # Silence prepended to every utterance so a sleepy Bluetooth speaker doesn't clip the start
         self.speech_lead_silence = max(float(p("speech_lead_silence")), 0.0)
         self.speech_lead_level = min(max(float(p("speech_lead_level")), 0.0), 0.2)
@@ -300,38 +385,106 @@ class FaceHandNode(Node):
             )
         threading.Thread(target=self._init_tts, daemon=True).start()
         self.create_subscription(String, "~/say", self._say_cb, 10)
+        # True while the robot's own voice is playing (the voice assistant mutes its microphone)
+        self.speaking_pub = self.create_publisher(Bool, "~/speaking", 10)
 
         # Live-tunable parameters (ros2 param set /robot_face tts_voice bm_george)
+        self._pending_fullscreen: Optional[bool] = None
         self.add_on_set_parameters_callback(self._on_params_changed)
+
+        # The face animates on its own clock; camera frames only steer it
+        self.render_dt = 1.0 / max(float(p("render_fps")), 1.0)
+        self.camera_timeout = max(float(p("camera_timeout")), 0.5)
+        self.render_timer = self.create_timer(self.render_dt, self._render_tick)
 
         # Face identification — learns to tell people apart (see face_id.py)
         self.face_id: Optional[FaceIdentifier] = None
         self.face_id_interval = max(int(p("face_id_interval")), 1)
+        self.face_id_min_period = max(float(p("face_id_min_period")), 0.0)
+        self._face_id_last_submit = 0.0
         self.current_person = None          # latest face_id.Match for the tracked person
         self.last_person_label: Optional[str] = None
         self.last_person_time = 0.0
         self.frame_counter = 0
+        # Identification runs in its own thread: the ArcFace back-end costs a few
+        # hundred ms per pass on the Orin CPU and must not stall the face animation.
+        self._face_id_lock = threading.Lock()
+        self._face_id_job: Optional[tuple] = None          # (frame, hint_xy, t_mono) awaiting the worker
+        self._face_id_busy = False
+        self._face_id_result: Optional[tuple] = None        # (match, t_mono) produced by the worker
+        self._face_id_thread: Optional[threading.Thread] = None
         if bool(p("face_id_enabled")):
             models_dir = str(p("face_id_models_dir")) or self._default_models_dir()
             try:
-                self.face_id = FaceIdentifier(
-                    models_dir=models_dir,
+                self.face_id = FaceIdentifier.create(
+                    str(p("face_id_backend")),
+                    opencv_models_dir=models_dir,
                     gallery_path=str(p("face_id_gallery")) or None,
-                    match_threshold=float(p("face_id_match_threshold")),
+                    faceid_python=str(p("face_id_python")),
+                    arcface_model=str(p("face_id_arcface_model")),
+                    det_size=int(p("face_id_det_size")),
+                    gpu=bool(p("face_id_gpu")),
+                    threads=int(p("face_id_threads")),
+                    log=lambda msg: self.get_logger().warning(msg),
+                    match_threshold=float(p("face_id_match_threshold")) or None,
                     auto_enroll=bool(p("face_id_auto_enroll")),
                     min_face_px=int(p("face_id_min_face_px")),
-                    unknown_threshold=float(p("face_id_unknown_threshold")),
+                    unknown_threshold=float(p("face_id_unknown_threshold")) or None,
                     enroll_min_face_px=int(p("face_id_enroll_min_face_px")),
                     enroll_frames=int(p("face_id_enroll_frames")),
+                    thumb_dir=str(p("face_thumb_dir")) or None,
                 )
+                g = self.face_id.gallery
                 self.get_logger().info(
-                    f"Face ID ready: {len(self.face_id.people())} known people "
-                    f"(gallery {os.path.expanduser(str(p('face_id_gallery')))})"
+                    f"Face ID ready: {self.face_id.backend.info}; {len(self.face_id.people())} known people "
+                    f"(gallery {g.path}, match ≥ {self.face_id.match_threshold:.2f})"
                 )
+                if g.dropped_on_load:
+                    self.get_logger().warning(
+                        f"Ignored {g.dropped_on_load} stored face views from a different embedding model."
+                    )
             except Exception as e:
                 self.get_logger().warning(f"Face ID disabled: {e}")
+
+        # Person tracking: the face detector on every frame (needs the ArcFace worker,
+        # cheap on the GPU, and immune to MediaPipe's phantom people in furniture) or
+        # MediaPipe pose as before.
+        tracker = str(p("tracker")).lower()
+        self.face_tracker = (
+            self.face_id is not None and self.face_id.backend.name == "arcface"
+            and tracker in ("auto", "face")
+        )
+        if tracker == "face" and not self.face_tracker:
+            self.get_logger().warning("tracker=face needs the ArcFace back-end; using MediaPipe pose.")
+        self._vision_result: Optional[tuple] = None     # (faces, match, t_mono) from the vision thread
+        self._track_hint: Optional[tuple] = None
+        if self.face_id is not None:
+            target = self._vision_loop if self.face_tracker else self._face_id_loop
+            self._face_id_thread = threading.Thread(target=target, daemon=True)
+            self._face_id_thread.start()
+        self.get_logger().info(
+            "Tracking people with " + ("the face detector (SCRFD) on every frame" if self.face_tracker else "MediaPipe pose")
+        )
+
+        # "Folks" web page: the people the robot knows, with editable names (embedded by the VLA manager)
+        self.people_web: Optional[PeopleWebServer] = None
+        if self.face_id is not None and bool(p("people_web_enabled")):
+            self.people_web = PeopleWebServer(
+                self.face_id, port=int(p("people_web_port")),
+                live=lambda: self.current_person,
+                on_change=self._on_people_changed,
+                log=lambda m: self.get_logger().warning(m),
+                cooldown=lambda: self.greeting_cooldown,
+                sink=lambda: self.audio_sink,          # the manager's volume slider acts on the speaker sink
+            )
+            if self.people_web.start():
+                self.get_logger().info(f"Folks page on http://0.0.0.0:{int(p('people_web_port'))}/")
+            else:
+                self.people_web = None
         self.person_pub = self.create_publisher(String, "~/person", 10)
         self.create_subscription(String, "~/set_person_name", self._set_person_name_cb, 10)
+        self.create_service(Trigger, "~/wave", self._wave_srv)    # play the UR wave program now
+        self.create_service(Trigger, "~/wink", self._wink_srv)    # wink one eye now
         self.create_subscription(String, "~/forget_person", self._forget_person_cb, 10)
         self.create_service(Trigger, "~/list_people", self._list_people_cb)
 
@@ -357,14 +510,16 @@ class FaceHandNode(Node):
             self.blink_min_interval_seconds, self.blink_max_interval_seconds
         )
 
-        # Mediapipe detectors
-        self.pose_detector = mp_pose.Pose(
-            model_complexity=0,
-            enable_segmentation=False,
-            smooth_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
+        # Mediapipe detectors (pose only when it is the tracker)
+        self.pose_detector = None
+        if not self.face_tracker:
+            self.pose_detector = mp_pose.Pose(
+                model_complexity=0,
+                enable_segmentation=False,
+                smooth_landmarks=True,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
         # Skip loading the hand model entirely in face-only mode.
         self.hands_detector = (
             None
@@ -404,17 +559,72 @@ class FaceHandNode(Node):
             return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "models"))
 
     def _identify_person(self, frame, hint_xy, now_mono: float):
-        """Run face ID on this frame (every ``face_id_interval`` frames) and
-        update ``current_person``; publishes ``~/person`` on each result."""
-        if self.face_id is None or self.frame_counter % self.face_id_interval != 0:
+        """Hand this frame to the face-ID thread (every ``face_id_interval``
+        frames, and only if it is idle), then apply any finished result:
+        update ``current_person`` and publish ``~/person``."""
+        if self.face_id is None:
             return
-        try:
-            match = self.face_id.identify(frame, near=hint_xy)
-        except Exception as e:
-            self.get_logger().warning(f"Face ID failed: {e}")
+        with self._face_id_lock:
+            if (self.frame_counter % self.face_id_interval == 0 and not self._face_id_busy
+                    and now_mono - self._face_id_last_submit >= self.face_id_min_period):
+                crop, (ox, oy) = self._head_crop(frame, self.tracked_face)
+                self._face_id_job = (crop, (hint_xy[0] - ox, hint_xy[1] - oy), (ox, oy), now_mono)
+                self._face_id_last_submit = now_mono
+            result, self._face_id_result = self._face_id_result, None
+        if result is None:
             return
+        match, _ = result
         if match is None:
             return
+        self._apply_person_match(match, now_mono)
+
+    @staticmethod
+    def _head_crop(frame, pose_box):
+        """Cut the head region out of the full frame for face ID.
+
+        The pose box spans every visible landmark (its top edge sits at the
+        eyes/ears), so the face is near its top. A crop a few hundred pixels
+        square keeps full resolution on the face while the detector sees a
+        small image — several times cheaper than scanning the whole 720p frame.
+        Returns (crop, (x_offset, y_offset)).
+        """
+        h, w = frame.shape[:2]
+        if pose_box is None:
+            return frame, (0, 0)
+        bx, by, bw, bh = pose_box
+        cx = bx + bw / 2.0
+        size = int(min(max(bw * 0.9, bh * 0.4, 224), max(w, h)))
+        x0 = int(max(0, min(cx - size / 2.0, w - size)))
+        y0 = int(max(0, min(by - size * 0.35, h - size)))
+        x1, y1 = min(w, x0 + size), min(h, y0 + size)
+        if x1 - x0 < 64 or y1 - y0 < 64:
+            return frame, (0, 0)
+        return np.ascontiguousarray(frame[y0:y1, x0:x1]), (x0, y0)
+
+    def _face_id_loop(self):
+        """Worker thread: identify the latest submitted frame."""
+        while rclpy.ok():
+            with self._face_id_lock:
+                job, self._face_id_job = self._face_id_job, None
+                if job is not None:
+                    self._face_id_busy = True
+            if job is None:
+                time.sleep(0.01)
+                continue
+            frame, hint_xy, (ox, oy), t_mono = job
+            match = None
+            try:
+                match = self.face_id.identify(frame, near=hint_xy)
+                if match is not None and (ox or oy):
+                    bx, by, bw, bh = match.box
+                    match.box = (bx + ox, by + oy, bw, bh)     # back to full-frame coordinates
+            except Exception as e:
+                self.get_logger().warning(f"Face ID failed: {e}")
+            with self._face_id_lock:
+                self._face_id_result = (match, t_mono)
+                self._face_id_busy = False
+
+    def _apply_person_match(self, match, now_mono: float):
         self.current_person = match
         if match.known:
             self.last_person_time = now_mono
@@ -487,6 +697,11 @@ class FaceHandNode(Node):
             self.get_logger().warning(f"Unknown person '{who}'.")
         self.current_person = None
 
+    def _on_people_changed(self):
+        """The Folks page renamed or forgot someone: re-announce under the new name."""
+        self.last_person_label = None
+        self.current_person = None
+
     def _list_people_cb(self, _req, res: Trigger.Response):
         if self.face_id is None:
             res.success = False
@@ -500,6 +715,43 @@ class FaceHandNode(Node):
     def _person_name(self) -> Optional[str]:
         m = self.current_person
         return m.name if (m is not None and m.known and m.name) else None
+
+    def _greeted_recently(self, person_id: str) -> bool:
+        """True when this person was greeted less than greeting_cooldown ago (logged once per visit)."""
+        if self.greeting_cooldown <= 0.0 or self.face_id is None:
+            return False
+        person = self.face_id.gallery.people.get(person_id)
+        if person is None or not person.last_greeted:
+            return False
+        since = time.time() - person.last_greeted
+        if since >= self.greeting_cooldown:
+            return False
+        if self._cooldown_logged_for != person_id:
+            self._cooldown_logged_for = person_id
+            left = self.greeting_cooldown - since
+            self.get_logger().info(f"{person.label} is back {since / 60:.0f} min after the last hello; "
+                                   f"not greeting again for {left / 60:.0f} min (Folks page: Reset hello)")
+        return True
+
+    def _wink(self) -> None:
+        """Close one eye for wink_duration (the greeting for someone back within the hour)."""
+        if self.wink_start_time is None:
+            self.wink_start_time = time.monotonic()
+
+    def _wink_srv(self, request, response):
+        self._wink()
+        response.success = True
+        response.message = f"winking the {'left' if self.wink_eye_index == 0 else 'right'} eye"
+        return response
+
+    def _mark_greeted(self, person_id: Optional[str]) -> None:
+        if person_id is None or self.face_id is None:
+            return
+        self._cooldown_logged_for = None
+        try:
+            self.face_id.gallery.mark_greeted(person_id)
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().warning(f"could not record the greeting for {person_id}: {e}")
 
     def _format_greeting(self, template: str, name: Optional[str]) -> str:
         if name is None:
@@ -538,8 +790,69 @@ class FaceHandNode(Node):
                     self.greeting_late_text = str(value)
                 elif name == "greeting_enabled":
                     self.greeting_enabled = bool(value)
+                elif name == "ur_wave_enabled":
+                    self.ur_wave_enabled = bool(value)
+                elif name == "ur_wave_program":
+                    self.ur_wave_program = str(value)
+                elif name == "ur_wave_cooldown":
+                    self.ur_wave_cooldown = max(float(value), 0.0)
+                elif name == "ur_wave_known_only":
+                    self.ur_wave_known_only = bool(value)
+                elif name == "ur_ip":
+                    self.ur = UrDashboard(str(value), log=lambda m: self.get_logger().info(m))
+                    self.ur_motion = UrMotion(str(value), log=lambda m: self.get_logger().info(m),
+                                              return_to=self.ur_motion.return_to, home_file=self.ur_motion.home_file,
+                                              approach_order=self.ur_motion.approach_order,
+                                              return_order=self.ur_motion.return_order,
+                                              retrace=self.ur_motion.retrace, retrace_speedup=self.ur_motion.retrace_speedup,
+                                              auto_power_up=self.ur_wave_power_up)
+                elif name == "ur_wave_power_up":
+                    self.ur_wave_power_up = bool(value)
+                    self.ur_motion.auto_power_up = bool(value)
+                elif name == "audio_sink":
+                    self.audio_sink = str(value)
+                    self.sink_watchdog.pattern = self.audio_sink
+                elif name == "ur_wave_return":
+                    mode = str(value).strip().lower()
+                    if mode not in ("home", "start", "none"):
+                        self.get_logger().warning(f"ur_wave_return={value!r}: expected home | start | none; using home")
+                        mode = "home"
+                    self.ur_motion.return_to = mode
+                elif name == "ur_wave_home_file":
+                    self.ur_motion.home_file = str(value)
+                elif name == "hand_wiggle_enabled":
+                    self.hand_wiggle_enabled = bool(value)
+                elif name in ("hand_host", "hand_port"):
+                    setattr(self.hand_wiggle, "host" if name == "hand_host" else "port", str(value) if name == "hand_host" else int(value))
+                elif name in ("hand_speed", "hand_wiggle_hz", "hand_wiggle_curl", "hand_thumb_curl", "hand_wiggle_phase"):
+                    attr = {"hand_speed": "speed", "hand_wiggle_hz": "hz", "hand_wiggle_curl": "curl", "hand_thumb_curl": "thumb",
+                            "hand_wiggle_phase": "phase"}[name]
+                    setattr(self.hand_wiggle, attr, int(value) if attr == "speed" else float(value))
+                elif name == "ur_wave_retrace":
+                    self.ur_motion.retrace = bool(value)
+                elif name == "ur_wave_retrace_speedup":
+                    self.ur_motion.retrace_speedup = max(1.0, float(value))
+                elif name in ("ur_wave_approach_order", "ur_wave_return_order"):
+                    try:
+                        parse_order(str(value))
+                    except ValueError as e:
+                        self.get_logger().warning(f"{name}: {e}; keeping the previous order")
+                    else:
+                        setattr(self.ur_motion, "approach_order" if name.endswith("approach_order") else "return_order", str(value))
+                elif name == "ur_wave_source":
+                    self.ur_wave_source = str(value)
+                elif name == "ur_wave_motion_file":
+                    self.ur_wave_motion_file = str(value)
                 elif name == "greeting_wait":
                     self.greeting_wait = max(float(value), 0.0)
+                elif name == "greeting_cooldown":
+                    self.greeting_cooldown = max(float(value), 0.0)
+                elif name == "wink_eye":
+                    self.wink_eye_index = 0 if str(value).strip().lower().startswith("l") else 1
+                elif name == "wink_duration":
+                    self.wink_duration = max(float(value), 0.2)
+                elif name == "wink_depth":
+                    self.wink_depth = max(0.0, min(float(value), 1.0))
                 elif name == "speech_lead_silence":
                     self.speech_lead_silence = max(float(value), 0.0)
                 elif name == "speech_lead_level":
@@ -552,6 +865,9 @@ class FaceHandNode(Node):
                     self.mouth_gestures_enabled = bool(value)
                 elif name == "mouth_gain":
                     self.mouth_gain = float(value)
+                elif name == "fullscreen":
+                    # GLFW calls must come from the render thread; apply on the next frame
+                    self._pending_fullscreen = bool(value)
                 # Other parameters are read once at startup; accepting them here is
                 # harmless but they only take effect after a restart.
             except (TypeError, ValueError) as e:
@@ -612,6 +928,53 @@ class FaceHandNode(Node):
         if text:
             self._speak(text)
 
+    # ---------- UR arm gesture ----------
+    def _wave(self, reason: str, force: bool = False) -> str:
+        """Play the pendant's wave program on the UR arm in the background (never blocks the
+        render loop). Skipped while disabled, within the cooldown, or when the arm is busy."""
+        if not force:
+            if not self.ur_wave_enabled or not self.ur_wave_program:
+                return "wave disabled"
+            if time.monotonic() - self._last_wave < self.ur_wave_cooldown:
+                return "wave cooldown"
+        if self.ur.busy or self.ur_motion.busy:
+            return "already waving"
+        self._last_wave = time.monotonic()
+        program, motion_file, source = self.ur_wave_program, os.path.expanduser(self.ur_wave_motion_file), self.ur_wave_source
+        use_recording = source == "recording" or (source == "auto" and os.path.isfile(motion_file))
+
+        def _phase(name):
+            # fingers ripple while the arm waves, open again for the way home
+            if name == "wave" and self.hand_wiggle_enabled:
+                if self.hand_wiggle.start():
+                    self.get_logger().info("hand: fingers wiggling (thumb still)")
+            elif name in ("retrace", "return", "done"):
+                n = self.hand_wiggle.sent
+                self.hand_wiggle.stop()
+                if n:
+                    self.get_logger().info(f"hand: fingers open again ({n} setpoints)")
+
+        def _run():
+            if use_recording:
+                ok, msg = self.ur_motion.play(motion_file, on_phase=_phase)
+                how = f"recording {os.path.basename(motion_file)}"
+            else:
+                ok, msg = self.ur.play(program, auto_power_up=self.ur_wave_power_up)
+                how = f"pendant program {program}"
+            # rclpy refuses a different severity from the same call site, so two lines
+            if ok:
+                self.get_logger().info(f"UR wave ({reason}, {how}): {msg}")
+            else:
+                self.get_logger().warning(f"UR wave ({reason}, {how}): {msg}")
+        threading.Thread(target=_run, daemon=True, name="ur_wave").start()
+        return "waving"
+
+    def _wave_srv(self, request, response):
+        r = self._wave("service call", force=True)
+        response.success = r == "waving"
+        response.message = f"{r} on {self.ur.ip}" if response.success else r
+        return response
+
     def _speak(self, text: str):
         """Synthesise ``text`` to a WAV and play it, feeding the samples to the
         mouth waveform in sync."""
@@ -653,8 +1016,16 @@ class FaceHandNode(Node):
             except Exception as e:
                 self.get_logger().warning(f"Could not add lead silence: {e}")
 
+        self.speaking_pub.publish(Bool(data=True))
+        try:
+            self._play_wav_with_mouth_inner(path, audio, rate)
+        finally:
+            self.speaking_pub.publish(Bool(data=False))
+
+    def _play_wav_with_mouth_inner(self, path: str, audio, rate: int):
         proc = subprocess.Popen(
-            ["aplay", "-q", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            ["aplay", "-q", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=player_env(self.audio_sink),       # pinned to the speaker even if the default moved
         )
         if audio is None or not self.mouth_enabled:
             proc.wait()
@@ -762,9 +1133,15 @@ class FaceHandNode(Node):
         return min(max(val, 0.01), 1.0)
 
     # ---------- Image callback ----------
-    def image_callback(self, msg: Image):
+    # ---------- Camera frames: detection + tracking only (rendering runs on its own timer) ----------
+    def image_callback(self, msg):
         try:
-            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            if isinstance(msg, CompressedImage):
+                frame = cv2.imdecode(np.frombuffer(msg.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    return
+            else:
+                frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except CvBridgeError as exc:
             self.get_logger().warning(f"CvBridge failed: {exc}")
             return
@@ -772,11 +1149,22 @@ class FaceHandNode(Node):
         self.camera_height, self.camera_width = frame.shape[:2]
         if self.raw_video_writer is not None:
             self.raw_video_writer.write(frame)
+        now_mono = time.monotonic()
+        if self._last_frame_time == 0.0 or self._camera_warned:
+            self.get_logger().info(
+                f"Camera frames arriving on {self._image_topic} ({self.camera_width}x{self.camera_height})."
+            )
+            self._camera_warned = False
+        self._last_frame_time = now_mono
+        self._process_frame(frame, time.time(), now_mono)
 
-        current_time = time.time()
-        current_mono = time.monotonic()
+    def _process_frame(self, frame, current_time: float, current_mono: float):
+        self.frame_counter += 1
+        if self.face_tracker:
+            self._process_frame_faces(frame, current_time, current_mono)
+            return
 
-        # ---- Person detection for eyes ----
+        # ---- Person detection for eyes (MediaPipe pose) ----
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         rgb_frame.flags.writeable = False
         pose_results = self.pose_detector.process(rgb_frame)
@@ -790,123 +1178,71 @@ class FaceHandNode(Node):
                 faces.append(pose_box)
 
         selected_face = pick_face(faces, self.tracked_face)
-        self.frame_counter += 1
         if selected_face is not None:
-            if self.tracked_face is None:
-                # New person detected — look happy, then greet once we know who it is
-                self.happy_until = current_time + self.greeting_happy_seconds
-                self.current_person = None
-                self.generic_greeted_at = None
-                if self.greeting_enabled:
-                    self.greeting_due = current_mono + (self.greeting_wait if self.face_id else 0.0)
-            self.tracked_face = selected_face
-            self.last_seen_time = current_time
+            self._on_person_seen(selected_face, current_time, current_mono)
             self._identify_person(frame, box_top_center(selected_face), current_mono)
-        elif current_time - self.last_seen_time > self.face_stick_seconds:
-            if self.tracked_face is not None:       # face just lost — cancel happy
-                self.happy_until = 0.0
-            self.tracked_face = None
+        self._process_hands(frame, rgb_frame, current_mono)
+
+    def _on_person_seen(self, box, current_time: float, current_mono: float):
+        """A person (pose box or face box) is in view this frame."""
+        if self.tracked_face is None:
+            # New person detected — look happy, then greet once we know who it is
+            self.happy_until = current_time + self.greeting_happy_seconds
             self.current_person = None
-            self.greeting_due = None
             self.generic_greeted_at = None
+            if self.greeting_enabled:
+                self.greeting_due = current_mono + (self.greeting_wait if self.face_id else 0.0)
+        self.tracked_face = box
+        self.last_seen_time = current_time
 
-        # Greeting, in two stages:
-        #  1. As soon as the person is recognised by name -> "hello <name>".
-        #     If the wait runs out first (face too small / not yet learned) -> generic "hello".
-        #  2. If a name arrives within greeting_name_window after the generic hello,
-        #     follow up with "oh, hi <name>" so known people still hear their name.
-        name = self._person_name()
-        if self.greeting_due is not None:
-            if name is not None:
-                self._speak(self._format_greeting(self.greeting_known_text, name))
-                self.greeting_due = None
-            elif current_mono >= self.greeting_due:
-                self._speak(self.greeting_text)
-                self.greeting_due = None
-                self.generic_greeted_at = current_mono
-                if self.face_id is not None:
-                    self.get_logger().info(
-                        f"Greeted generically: no face identified within {self.greeting_wait:.1f}s "
-                        "(will add the name if recognised shortly)."
-                    )
-        elif self.generic_greeted_at is not None:
-            if name is not None:
-                self._speak(self._format_greeting(self.greeting_late_text, name))
-                self.generic_greeted_at = None
-            elif current_mono - self.generic_greeted_at > self.greeting_name_window:
-                self.generic_greeted_at = None
+    # ---------- Face-detector tracking (vision thread + per-frame bookkeeping) ----------
+    def _process_frame_faces(self, frame, current_time: float, current_mono: float):
+        """Hand the newest frame to the vision thread and apply its latest result."""
+        with self._face_id_lock:
+            self._face_id_job = (np.ascontiguousarray(frame), current_mono)   # newest frame wins
+            result, self._vision_result = self._vision_result, None
+        if result is None:
+            return
+        faces, match, _t = result
+        boxes = [f.box for f in faces
+                 if f.score >= self.face_id.min_detect_score and f.box[2] >= self.face_id.min_face_px]
+        selected = pick_face(boxes, self.tracked_face)
+        if selected is not None:
+            self._on_person_seen(selected, current_time, current_mono)
+            self._track_hint = (selected[0] + selected[2] / 2.0, selected[1] + selected[3] / 2.0)
+        if match is not None:
+            self._apply_person_match(match, current_mono)
 
-        time_since_face = current_time - self.last_seen_time
-        if self.tracked_face is not None:
-            center = box_top_center(self.tracked_face)
-        elif time_since_face > self.idle_scan_delay_seconds:
-            scan_elapsed = time_since_face - self.idle_scan_delay_seconds
-            sweep_angle = (2 * math.pi / self.idle_scan_period_seconds) * scan_elapsed
-            # Slow figure-of-eight sweep plus a faster, smaller wander so the
-            # eyes don't look like they're on rails
-            wander_x = math.sin(scan_elapsed * 1.9 + 0.7) * self.camera_width * self.idle_wander_fraction
-            wander_y = math.sin(scan_elapsed * 2.6) * self.camera_height * self.idle_wander_fraction
-            center = (
-                self.camera_width / 2.0
-                + math.sin(sweep_angle) * self.camera_width * self.idle_scan_horizontal_fraction
-                + wander_x,
-                self.camera_height / 2.0
-                + math.cos(sweep_angle * 0.7) * self.camera_height * self.idle_scan_vertical_fraction
-                + wander_y,
-            )
-        else:
-            center = (self.camera_width / 2.0, self.camera_height / 2.0)
+    def _vision_loop(self):
+        """Vision thread: detect faces on every frame; embed + identify every face_id_min_period."""
+        while rclpy.ok():
+            with self._face_id_lock:
+                job, self._face_id_job = self._face_id_job, None
+            if job is None:
+                time.sleep(0.005)
+                continue
+            frame, t_mono = job
+            now = time.monotonic()
+            do_embed = (now - self._face_id_last_submit) >= self.face_id_min_period
+            faces, match = [], None
+            try:
+                faces = self.face_id.backend.analyze(frame, embed=do_embed)
+                if do_embed and faces:
+                    self._face_id_last_submit = now
+                    match = self.face_id.identify(frame, near=self._track_hint, faces=faces)
+            except Exception as e:
+                self.get_logger().warning(f"Face tracking failed: {e}")
+            with self._face_id_lock:
+                self._vision_result = (faces, match, t_mono)
 
-        if self.smoothed_center is None:
-            self.smoothed_center = center
-        else:
-            smoothing_factor_active = self.clamp_speed(self.gaze_speed)
-            smoothing_factor_idle = self.clamp_speed(self.gaze_idle_speed)
-            current_smoothing = smoothing_factor_active if self.tracked_face is not None else smoothing_factor_idle
-            self.smoothed_center = (
-                self.smoothed_center[0] + (center[0] - self.smoothed_center[0]) * current_smoothing,
-                self.smoothed_center[1] + (center[1] - self.smoothed_center[1]) * current_smoothing,
-            )
+    def _gaze_point(self, box):
+        """Where the eyes should look for a tracked box: the face centre for face
+        boxes, the top of the body box for MediaPipe pose boxes."""
+        if self.face_tracker:
+            return (box[0] + box[2] / 2.0, box[1] + box[3] / 2.0)
+        return box_top_center(box)
 
-        if self.blink_start_time is None and current_mono >= self.next_blink_time:
-            self.blink_start_time = current_mono
-
-        if self.blink_start_time is not None:
-            elapsed = current_mono - self.blink_start_time
-            closing = self.blink_duration_seconds / 2.0
-            opening = closing
-            hold = max(self.blink_closed_hold, 0.0)
-
-            total = closing + hold + opening
-            if elapsed >= total:
-                self.blink_start_time = None
-                self.next_blink_time = schedule_blink(
-                    self.blink_min_interval_seconds, self.blink_max_interval_seconds
-                )
-                blink_amount = 0.0
-            else:
-                if elapsed <= closing:
-                    blink_amount = min(1.0, elapsed / closing)
-                elif elapsed <= closing + hold:
-                    blink_amount = 1.0
-                else:
-                    elapsed_open = elapsed - closing - hold
-                    blink_amount = max(0.0, 1.0 - (elapsed_open / opening))
-        else:
-            blink_amount = 0.0
-
-        # Gaze mapping normalized by camera dims
-        norm_x = (self.smoothed_center[0] - self.camera_width / 2.0) / (self.camera_width / 2.0)
-        norm_y = (self.smoothed_center[1] - self.camera_height / 2.0) / (self.camera_height / 2.0)
-        norm_x = max(min(norm_x, 1.0), -1.0)
-        norm_y = max(min(norm_y, 1.0), -1.0)
-
-        # Scale by usable pupil travel within the sclera
-        max_travel = max(self.eye_white_radius - self.eye_radius, 0)
-        gaze_gain_x = 0.7
-        gaze_gain_y = 0.6
-        offsetX = -norm_x * max_travel * gaze_gain_x  # mirror horizontally
-        offsetY = norm_y * max_travel * gaze_gain_y
+    def _process_hands(self, frame, rgb_frame, current_mono: float):
 
         # Determine if we need hands processing (for in-eyes overlay or hotkey-triggered streaming)
         if self.hand_stream_enabled and self.global_hotkey_supported:
@@ -946,7 +1282,7 @@ class FaceHandNode(Node):
                 if self.hand_socket is None:
                     try:
                         self.hand_socket = socket.create_connection(
-                            (self.get_parameter("hand_host").value, int(self.get_parameter("hand_port").value)),
+                            (self.get_parameter("hand_relay_host").value, int(self.get_parameter("hand_relay_port").value)),
                             timeout=0.5,
                         )
                         self.hand_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -978,16 +1314,181 @@ class FaceHandNode(Node):
             else:
                 self.gl_renderer.update_hand_panel(None)
 
+
+    # ---------- Render tick: runs at render_fps whether or not camera frames arrive ----------
+    def _per_tick(self, per_frame_factor: float) -> float:
+        """Per-camera-frame smoothing factor -> equivalent per-render-tick factor."""
+        f = self.clamp_speed(per_frame_factor)
+        return 1.0 - (1.0 - f) ** (self.render_dt * self.capture_fps)
+
+    def _render_tick(self):
+        current_time = time.time()
+        current_mono = time.monotonic()
+
+        # Camera watchdog: say so once when frames stop; the face keeps animating regardless
+        if self._last_frame_time == 0.0 or current_mono - self._last_frame_time > self.camera_timeout:
+            if not self._camera_warned and current_mono - self._start_mono > self.camera_timeout:
+                self.get_logger().warning(
+                    f"No camera frames on {self._image_topic} for {self.camera_timeout:.0f}s; "
+                    "the face keeps animating but cannot see anyone."
+                )
+                self._camera_warned = True
+
+        # Face lost (also when the camera stopped mid-visit): back to idle scanning
+        if self.tracked_face is not None and current_time - self.last_seen_time > self.face_stick_seconds:
+            self.happy_until = 0.0
+            self.tracked_face = None
+            self.current_person = None
+            self.greeting_due = None
+            self.generic_greeted_at = None
+
+        # Greeting, in two stages:
+        #  1. As soon as the person is recognised by name -> "hello <name>".
+        #     If the wait runs out first (face too small / not yet learned) -> generic "hello".
+        #  2. If a name arrives within greeting_name_window after the generic hello,
+        #     follow up with "oh, hi <name>" so known people still hear their name.
+        #  Each recognised person (named or not) is greeted at most once per greeting_cooldown
+        #  (an hour by default); the Folks page's "Reset hello" clears that per person.
+        name = self._person_name()
+        pid = self.current_person.person_id if (self.current_person is not None and self.current_person.known) else None
+        if self.greeting_due is not None:
+            if pid is not None and self._greeted_recently(pid):
+                self.greeting_due = None                   # seen again within the hour: a wink, no hello
+                self._wink()
+            elif name is not None:
+                self._speak(self._format_greeting(self.greeting_known_text, name))
+                self.greeting_due = None
+                self._mark_greeted(pid)
+                self._wave(f"recognised {name}")
+            elif current_mono >= self.greeting_due:
+                self._speak(self.greeting_text)
+                self.greeting_due = None
+                self.generic_greeted_at = current_mono
+                if pid is not None:                        # recognised but unnamed: that was their hello
+                    self._mark_greeted(pid)
+                if not self.ur_wave_known_only:
+                    self._wave("someone is here")
+                if self.face_id is not None:
+                    self.get_logger().info(
+                        f"Greeted generically: no face identified within {self.greeting_wait:.1f}s "
+                        "(will add the name if recognised shortly)."
+                    )
+        elif self.generic_greeted_at is not None:
+            if pid is not None:
+                # The generic hello already went out before we knew who it was. Add the name only if
+                # this person had not been greeted within the hour anyway; either way it counts.
+                recent = self._greeted_recently(pid)
+                self._mark_greeted(pid)
+                self.generic_greeted_at = None
+                if name is not None and not recent:
+                    self._speak(self._format_greeting(self.greeting_late_text, name))
+                    self._wave(f"recognised {name}")
+                elif recent:
+                    self._wink()
+            elif current_mono - self.generic_greeted_at > self.greeting_name_window:
+                self.generic_greeted_at = None
+
+        time_since_face = current_time - self.last_seen_time
+        if self.tracked_face is not None:
+            center = self._gaze_point(self.tracked_face)
+        elif time_since_face > self.idle_scan_delay_seconds:
+            scan_elapsed = time_since_face - self.idle_scan_delay_seconds
+            sweep_angle = (2 * math.pi / self.idle_scan_period_seconds) * scan_elapsed
+            # Slow figure-of-eight sweep plus a faster, smaller wander so the
+            # eyes don't look like they're on rails
+            wander_x = math.sin(scan_elapsed * 1.9 + 0.7) * self.camera_width * self.idle_wander_fraction
+            wander_y = math.sin(scan_elapsed * 2.6) * self.camera_height * self.idle_wander_fraction
+            center = (
+                self.camera_width / 2.0
+                + math.sin(sweep_angle) * self.camera_width * self.idle_scan_horizontal_fraction
+                + wander_x,
+                self.camera_height / 2.0
+                + math.cos(sweep_angle * 0.7) * self.camera_height * self.idle_scan_vertical_fraction
+                + wander_y,
+            )
+        else:
+            center = (self.camera_width / 2.0, self.camera_height / 2.0)
+
+        if self.smoothed_center is None:
+            self.smoothed_center = center
+        else:
+            k = self._per_tick(self.gaze_speed if self.tracked_face is not None else self.gaze_idle_speed)
+            self.smoothed_center = (
+                self.smoothed_center[0] + (center[0] - self.smoothed_center[0]) * k,
+                self.smoothed_center[1] + (center[1] - self.smoothed_center[1]) * k,
+            )
+
+        if self.blink_start_time is None and current_mono >= self.next_blink_time \
+                and self.wink_start_time is None:          # no blink on top of a wink
+            self.blink_start_time = current_mono
+
+        if self.blink_start_time is not None:
+            elapsed = current_mono - self.blink_start_time
+            closing = self.blink_duration_seconds / 2.0
+            opening = closing
+            hold = max(self.blink_closed_hold, 0.0)
+
+            total = closing + hold + opening
+            if elapsed >= total:
+                self.blink_start_time = None
+                self.next_blink_time = schedule_blink(
+                    self.blink_min_interval_seconds, self.blink_max_interval_seconds
+                )
+                blink_amount = 0.0
+            else:
+                if elapsed <= closing:
+                    blink_amount = min(1.0, elapsed / closing)
+                elif elapsed <= closing + hold:
+                    blink_amount = 1.0
+                else:
+                    elapsed_open = elapsed - closing - hold
+                    blink_amount = max(0.0, 1.0 - (elapsed_open / opening))
+        else:
+            blink_amount = 0.0
+
+        # Gaze mapping normalized by camera dims
+        norm_x = (self.smoothed_center[0] - self.camera_width / 2.0) / (self.camera_width / 2.0)
+        norm_y = (self.smoothed_center[1] - self.camera_height / 2.0) / (self.camera_height / 2.0)
+        norm_x = max(min(norm_x, 1.0), -1.0)
+        norm_y = max(min(norm_y, 1.0), -1.0)
+
+        # Scale by usable pupil travel within the sclera
+        max_travel = max(self.eye_white_radius - self.eye_radius, 0)
+        gaze_gain_x = 0.7
+        gaze_gain_y = 0.6
+        offsetX = -norm_x * max_travel * gaze_gain_x  # mirror horizontally
+        offsetY = norm_y * max_travel * gaze_gain_y
+
         # Render eyes + mouth waveform via GL shader
+        if self._pending_fullscreen is not None:
+            self.gl_renderer.set_fullscreen(self._pending_fullscreen)
+            self._pending_fullscreen = None
+
         (mouth_level, mouth_samples, mouth_smile, mouth_skew,
          mouth_path, mouth_shape) = self._update_mouth(
             current_mono, seeing_person=self.tracked_face is not None
         )
+        wink_amount = 0.0
+        if self.wink_start_time is not None:
+            w = current_mono - self.wink_start_time
+            close_t, open_t = 0.18 * self.wink_duration, 0.25 * self.wink_duration
+            hold_t = self.wink_duration - close_t - open_t
+            if w >= self.wink_duration:
+                self.wink_start_time = None
+                self.next_blink_time = max(self.next_blink_time, current_mono + 1.0)
+            elif w <= close_t:
+                wink_amount = w / close_t
+            elif w <= close_t + hold_t:
+                wink_amount = 1.0
+            else:
+                wink_amount = max(0.0, 1.0 - (w - close_t - hold_t) / open_t)
         self.gl_renderer.render(
             blink=blink_amount,
+            wink=wink_amount * self.wink_depth,      # a sliver stays open at the bottom of the wink
+            wink_eye=self.wink_eye_index,
             gaze_offset=(offsetX, offsetY),
             mood=3 if current_time < self.happy_until else self.eyelash_count,
-            dt=1.0 / self.capture_fps,
+            dt=self.render_dt,
             mouth_level=mouth_level,
             mouth_samples=mouth_samples,
             mouth_smile=mouth_smile,
@@ -1001,8 +1502,12 @@ class FaceHandNode(Node):
 
     # ---------- Cleanup ----------
     def destroy_node(self):
+        if getattr(self, 'people_web', None) is not None:
+            self.people_web.stop()
         if self._kokoro is not None:
             self._kokoro.stop()
+        if self.face_id is not None:
+            self.face_id.stop()
         if self.hand_socket is not None:
             self.hand_socket.close()
         if self.raw_video_writer is not None:

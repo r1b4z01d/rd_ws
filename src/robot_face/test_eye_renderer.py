@@ -12,6 +12,7 @@ Controls:
     M           toggle simulated talking (procedural mouth waveform)
     N           toggle simulated talking with synthesised audio samples
     G           cycle through every mouth gesture (press again to stop)
+    F / click   toggle fullscreen (Esc leaves fullscreen)
 """
 
 import math

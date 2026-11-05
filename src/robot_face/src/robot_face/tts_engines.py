@@ -94,6 +94,27 @@ class KokoroTTS:
         with self._lock:
             return self._start_locked()
 
+    def _provider_env(self) -> dict:
+        """Pin kokoro-onnx to CUDA when the venv's onnxruntime has it, else CPU.
+
+        Left to itself kokoro-onnx uses *every* available provider, which with
+        NVIDIA's Jetson build puts TensorRT first and spends minutes compiling
+        engines on the first start; CUDA alone is fast and plenty.
+        """
+        env = dict(os.environ)
+        if env.get("ONNX_PROVIDER"):
+            return env
+        try:
+            out = subprocess.run(
+                [self.python, "-c", "import onnxruntime as o; print(','.join(o.get_available_providers()))"],
+                capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+        except Exception:
+            out = ""
+        env["ONNX_PROVIDER"] = "CUDAExecutionProvider" if "CUDAExecutionProvider" in out else "CPUExecutionProvider"
+        self.provider = env["ONNX_PROVIDER"]
+        return env
+
     def _start_locked(self) -> bool:
         self._stop_locked()
         t0 = time.monotonic()
@@ -101,7 +122,7 @@ class KokoroTTS:
             self._proc = subprocess.Popen(
                 [self.python, WORKER_SCRIPT, "--model-dir", self.model_dir, "--voice", self.voice],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1,
+                text=True, bufsize=1, env=self._provider_env(),
             )
         except OSError as e:
             self._log(f"Kokoro worker failed to launch: {e}")

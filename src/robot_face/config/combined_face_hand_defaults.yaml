@@ -1,18 +1,25 @@
 combined_face_hand:
   ros__parameters:
-    image_topic: "/camera/camera/color/image_raw"
-    face_only: false          # true = eyes only; disables all hand tracking + joint streaming
-    hand_in_eyes: true
+    image_topic: "/camera/camera/color/image_raw"   # RealSense colour (robot_disco launch). A topic ending in
+                                                     # "compressed" (e.g. /vla/cameras/scene/image/compressed) is decoded as JPEG
+    fullscreen: true          # face fills the primary monitor; click the face (or press F) to toggle windowed
+    window_focus_seconds: 10.0  # after start (and on entering fullscreen) keep asking GNOME to focus the window
+                                # this long: a window supervisor opened gets no focus by itself, and an
+                                # unfocused fullscreen window sits behind the desktop
+    render_fps: 30.0          # the face animates on its own clock; camera frames only steer it
+    camera_timeout: 3.0       # seconds without frames before the face stops expecting a person
+    face_only: true           # true = eyes only; disables all hand tracking + joint streaming
+    hand_in_eyes: false       # (ignored while face_only is true)
     mirror: true
     width: 1280
     height: 720
     fps: 30.0
-    relay_hand: true
+    relay_hand: false         # (ignored while face_only is true)
     hand_hotkey: "ctrl+shift+h"
-    hand_host: "192.168.1.194"
-    hand_port: 8765
+    hand_relay_host: "192.168.11.117"   # the hand's ESP32, TCP line protocol (:8765) — the hand-tracking relay only;
+    hand_relay_port: 8765               #   hand_host / hand_port / hand_speed (below) are the wave's UDP finger wiggle
     hand_rate: 20.0
-    hand_speed: 1000
+    hand_relay_speed: 1000
     hand_panel_height: 1000
     hand_panel_fraction: 0.8
     hand_panel_scale: 1.0
@@ -39,6 +46,10 @@ combined_face_hand:
     mouth_gesture_min_interval: 4.0    # seconds between idle gestures (min)
     mouth_gesture_max_interval: 12.0   # seconds between idle gestures (max)
     # Greeting (spoken via TTS when a new person appears)
+    # Speaker: the dock's USB audio adapter. Kept as the PulseAudio default sink whenever it is present
+    # (it enumerates after pulse at boot, so default.pa's set-default-sink misses it) and aplay is pinned to it.
+    audio_sink: "C-Media"
+    audio_sink_check: 5.0
     greeting_enabled: true
     greeting_text: "hello"                 # for strangers / unnamed people
     greeting_known_text: "hello {name}"    # for people you have named
@@ -46,6 +57,45 @@ combined_face_hand:
     greeting_wait: 2.0                     # seconds to wait for face ID before greeting generically
     greeting_name_window: 10.0             # seconds after a generic hello to still add the name
     greeting_happy_seconds: 30.0
+    greeting_cooldown: 3600.0              # seconds before the same recognised person is greeted again (0 = every visit); "Reset hello" on the Folks page clears it
+    wink_eye: "right"                      # someone back within the window gets a wink instead of a hello
+    wink_duration: 0.7
+    wink_depth: 0.9                        # 1.0 = fully shut; 0.9 leaves a sliver of the eye open
+
+    # UR arm gesture: play a program saved on the teach pendant when someone is recognised
+    # (through the Dashboard Server on :29999; PolyScope must be in Remote Control, robot
+    # powered with brakes released; skipped while teleop/eval are driving the arm).
+    ur_wave_enabled: true
+    ur_ip: "192.168.11.21"
+    ur_wave_program: "wave.urp"            # under /programs on the pendant
+    ur_wave_cooldown: 20.0                 # seconds between waves
+    ur_wave_known_only: true               # only people recognised by name (false: on every hello)
+    ur_wave_source: "auto"                 # auto = recording when present, else the pendant program (dashboard)
+    ur_wave_motion_file: "~/.robot_face/motions/wave.json"   # scripts/ur_record_motion.py writes it
+    ur_wave_return: "home"                 # after the wave: home = VLA's home pose (below), start = where the arm was, none
+    # Where the arm parks after the wave: comma-separated, the first existing file wins — the wave's own "forward
+    # home" (scripts/ur_record_motion.py --capture-home), else the eval/training home (teleop panel "Set Home").
+    ur_wave_home_file: "~/.robot_face/motions/home.json,~/rd_ws/VLA/outputs/home_pose.json"
+    # Staged joint orders for the two ramps (digits = joints 0 base .. 5 wrist 3, ">" = next stage; "" = all joints
+    # at once). A wave demonstrated by freedrive from home back to home needs none. For a recording that starts far
+    # from home, derive orders with src/robot_face/scripts/ur_path_eval.py (it rejects any order that passes over the
+    # chassis; for the pendant wave + eval home it gave "2345>0>1" in and "015>34>2" out).
+    ur_wave_approach_order: ""
+    ur_wave_return_order: ""
+    ur_wave_retrace: true                  # a take that starts at home but ends elsewhere goes home along its own samples, backwards
+    ur_wave_retrace_speedup: 1.5           # that retrace plays this much faster than demonstrated (1 = as shown)
+    # AmazingHand during the wave: index, middle and ring ripple between open and hand_wiggle_curl at hand_wiggle_hz,
+    # the thumb stays at hand_thumb_curl; the fingers open again for the way home. UDP line protocol to the hand's
+    # ESP32 (the same J: lines the VLA teleop sends); a hand that does not answer the Q probe is logged and skipped.
+    hand_wiggle_enabled: true
+    hand_host: "192.168.11.117"
+    hand_port: 8766
+    hand_speed: 500                        # firmware J: speed, 50..2000
+    hand_wiggle_hz: 0.5                    # ripples per second (the user's pick after trying 2, 0.5, 0.25; 2026-11-02)
+    hand_wiggle_curl: 0.333                # fingers ripple between fully open and 2/3 open
+    hand_thumb_curl: 0.0
+    hand_wiggle_phase: 0.25                # fraction of a period between neighbouring fingers: index leads, middle and ring trail
+    ur_wave_power_up: true                 # arm IDLE / protective stop: the eval's startup first (power on, brake release)
     speech_lead_silence: 1.5               # seconds of lead-in before each utterance (Bluetooth wake-up)
     speech_lead_level: 0.01                # lead-in is a faint 50 Hz tone at this level (0 = pure silence)
     # Text-to-speech engine: auto = Kokoro-82M if installed, else Coqui, else espeak
@@ -55,16 +105,27 @@ combined_face_hand:
     tts_lang: "auto"                       # auto = from the voice prefix (a/b English, e Spanish, f French, ...)
     kokoro_python: "~/.robot_face/kokoro-venv/bin/python"   # venv with kokoro-onnx (see provision/setup_kokoro.sh)
     kokoro_model_dir: "~/.robot_face/kokoro"                # kokoro-v1.0.onnx + voices-v1.0.bin
-    # Face identification (learns to tell people apart; OpenCV YuNet + SFace)
+    # Face identification (learns to tell people apart)
+    tracker: "auto"                        # auto = face detector on every frame when ArcFace is on the GPU box; pose = MediaPipe
     face_id_enabled: true
-    face_id_models_dir: ""                 # "" = share/robot_face/models
-    face_id_gallery: "~/.robot_face/people.json"
-    face_id_interval: 3                    # run face ID every N camera frames
-    face_id_match_threshold: 0.363         # cosine similarity; higher = stricter
+    face_id_backend: "auto"                # auto = SCRFD+ArcFace if ~/.robot_face/faceid-venv exists, else OpenCV YuNet+SFace
+    face_id_python: "~/.robot_face/faceid-venv/bin/python"   # venv with insightface (provision/setup_faceid.sh)
+    face_id_arcface_model: "buffalo_l"     # insightface model pack (buffalo_l = SCRFD-10GF + ArcFace r50)
+    face_id_det_size: 640                  # detector input size; full frames at 640 cost ~6 ms on the Orin GPU
+    face_id_gpu: true                      # CUDA provider for the worker (NVIDIA's Jetson onnxruntime-gpu; setup_faceid.sh)
+    face_id_models_dir: ""                 # OpenCV back-end models ("" = share/robot_face/models)
+    face_id_gallery: "~/.robot_face/people.json"   # ArcFace stores in people.arcface.json (different embedding space)
+    face_id_interval: 3                    # run face ID every N camera frames (in a background thread)
+    face_thumb_dir: "~/.robot_face/faces"   # one face picture per person, for the Folks page
+    people_web_enabled: true               # Folks page: known people with pictures and editable names
+    people_web_port: 8096                  # embedded by the VLA manager as the "Folks" tab
+    face_id_min_period: 0.5                # seconds between identification (embedding) passes; detection runs every frame
+    face_id_threads: 2                     # onnxruntime threads for the ArcFace worker (default pool spins on every core)
+    face_id_match_threshold: 0.0           # 0 = back-end default (SFace 0.363, ArcFace 0.45); higher = stricter
     face_id_auto_enroll: true              # learn strangers automatically as person_N
     face_id_min_face_px: 40                # ignore faces narrower than this (px)
-    face_id_unknown_threshold: 0.28        # below this vs everyone known = a stranger; between = unsure
+    face_id_unknown_threshold: 0.0         # 0 = back-end default; below it vs everyone known = a stranger, between = unsure
     face_id_enroll_min_face_px: 64         # only learn new people when the face is at least this wide
     face_id_enroll_frames: 6               # consistent passes needed before enrolling a stranger
-    save_raw_video: "/tmp/raw_camera.mp4"      # set to null or "" to disable
+    save_raw_video: ""                          # path to record the raw camera (grows without bound; "" = off)
     save_video: "/tmp/combined_output.mp4"     # set to null or "" to disable

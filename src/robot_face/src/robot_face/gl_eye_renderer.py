@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import cv2
 import glfw
 import moderngl
@@ -24,12 +26,17 @@ void main() {
 _FRAG = """
 #version 330 core
 
-uniform vec2  u_resolution;
+uniform vec2  u_resolution;     // design canvas size (pixels) — all layout is in these units
+uniform vec2  u_viewport;       // actual framebuffer size (pixels)
+uniform float u_scale;          // design px -> framebuffer px (letterbox scale)
+uniform vec2  u_offset;         // letterbox offset in framebuffer px (top-left origin)
 uniform vec2  u_eye_left;       // eye center in pixel coords (Y=down)
 uniform vec2  u_eye_right;
 uniform float u_eye_hw;         // half-width  (pixels)
 uniform float u_eye_hh_base;    // half-height when fully open (pixels)
-uniform float u_blink;          // 0 = open, 1 = closed
+uniform float u_blink;          // 0 = open, 1 = closed (both eyes)
+uniform float u_wink;           // 0 = open, 1 = closed, for the winking eye only
+uniform int   u_wink_eye;       // 0 = left eye (screen left), 1 = right eye
 uniform vec2  u_gaze;           // pupil offset (pixels, Y=down)
 uniform int   u_mood;           // 0=neutral 1=tired 2=angry 3=happy 4=suspicious
 uniform float u_time;
@@ -113,8 +120,8 @@ float moodMask(vec2 p, vec2 hs, int mood) {
     return -1.0e5;                                         // neutral: no cut anywhere
 }
 
-vec3 renderEye(vec2 frag, vec2 center) {
-    float hh = u_eye_hh_base * max(0.0, 1.0 - u_blink);
+vec3 renderEye(vec2 frag, vec2 center, float extra_close) {
+    float hh = u_eye_hh_base * max(0.0, 1.0 - max(u_blink, extra_close));
     if (hh < 1.0) return vec3(0.0);
 
     vec2 hs       = vec2(u_eye_hw, hh);
@@ -226,10 +233,17 @@ vec3 renderMouth(vec2 frag) {
 }
 
 void main() {
-    // OpenGL origin is bottom-left; flip Y to match our top-left pixel layout
-    vec2 frag = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+    // OpenGL origin is bottom-left; flip Y to match our top-left pixel layout,
+    // then map framebuffer pixels back to the design canvas (fullscreen letterboxing).
+    vec2 fb   = vec2(gl_FragCoord.x, u_viewport.y - gl_FragCoord.y);
+    vec2 frag = (fb - u_offset) / u_scale;
+    // 1 inside the canvas, 0 in the letterbox bars (a multiply, not a return,
+    // keeps the dFdx inside renderMouth in uniform control flow)
+    float on_canvas = step(0.0, frag.x) * step(0.0, frag.y)
+                    * step(frag.x, u_resolution.x) * step(frag.y, u_resolution.y);
 
-    vec3 col = renderEye(frag, u_eye_left) + renderEye(frag, u_eye_right);
+    vec3 col = renderEye(frag, u_eye_left,  u_wink_eye == 0 ? u_wink : 0.0)
+             + renderEye(frag, u_eye_right, u_wink_eye == 1 ? u_wink : 0.0);
     col += renderMouth(frag);
 
     // Hand skeleton panel — bottom u_hand_panel_frac of the screen
@@ -247,7 +261,7 @@ void main() {
     // Subtle full-canvas vignette
     vec2  uv  = frag / u_resolution - 0.5;
     float vig = 1.0 - dot(uv, uv) * 1.6;
-    col *= clamp(vig, 0.0, 1.0);
+    col *= clamp(vig, 0.0, 1.0) * on_canvas;
 
     frag_color = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
@@ -307,10 +321,28 @@ class GlEyeRenderer:
         mouth_amp: float = 70.0,        # peak displacement at level 1.0 (pixels)
         mouth_samples: int = 512,       # resolution of the sampled-audio texture
         mouth_path_points: int = 128,   # max points in a gesture shape polyline
+        fullscreen: bool = False,       # start fullscreen on the primary monitor
+        toggle_on_click: bool = True,   # a mouse click (or the F key) toggles fullscreen
+        grab_focus_seconds: float = 10.0,  # keep asking the window manager for focus this long after start
+        log=None,                       # an rclpy logger (``.info`` / ``.warning``); None prints
     ):
         if not glfw.init():
             raise RuntimeError("glfw.init() failed")
+        self._log = log
 
+        # Design canvas: every layout value below is in these pixel units. In
+        # fullscreen the canvas is scaled to fit the monitor and letterboxed.
+        self._design = (int(width), int(height))
+        self._fullscreen = False
+        self._windowed_geometry = (100, 100, int(width), int(height))   # x, y, w, h to restore
+        self._toggle_on_click = bool(toggle_on_click)
+
+        # GLFW minimises a fullscreen window the moment it loses focus (AUTO_ICONIFY). On the robot
+        # that is exactly what happens at start: GNOME's focus-stealing prevention keeps the focus on
+        # the desktop when a process it did not launch (supervisor) opens a window, GLFW sees the
+        # focus loss and iconifies the face, and it stays hidden until somebody clicks it. The face
+        # must never minimise itself; focus is requested separately below (``grab_focus``).
+        glfw.window_hint(glfw.AUTO_ICONIFY, False)
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
@@ -327,6 +359,20 @@ class GlEyeRenderer:
 
         self._ctx  = moderngl.create_context()
         self._prog = self._ctx.program(vertex_shader=_VERT, fragment_shader=_FRAG)
+
+        # Window events: resize re-letterboxes; click / F toggles fullscreen; Esc leaves it
+        glfw.set_framebuffer_size_callback(self._window, lambda win, w, h: self._update_viewport())
+        glfw.set_mouse_button_callback(self._window, self._on_mouse_button)
+        glfw.set_key_callback(self._window, self._on_key)
+        glfw.set_window_focus_callback(self._window, self._on_focus)
+        glfw.set_window_iconify_callback(self._window, self._on_iconify)
+
+        # Focus grab (see AUTO_ICONIFY above): until the deadline, every half second the window is
+        # restored if minimised and asked to be activated; ``_pursue_focus`` runs from ``render``.
+        self._focus_deadline: float | None = None
+        self._focus_next_try = 0.0
+        self._focus_tries = 0
+        self._focus_unsupported = False
 
         # Fullscreen quad (two triangles as TRIANGLE_STRIP)
         quad     = np.array([-1, -1,  1, -1,  -1, 1,  1, 1], dtype="f4")
@@ -390,6 +436,137 @@ class GlEyeRenderer:
 
         self._t = 0.0
 
+        self._update_viewport()
+        if fullscreen:
+            self.set_fullscreen(True)
+        self.grab_focus(grab_focus_seconds)
+
+    # ------------------------------------------------------------------
+    # Focus: a window the user did not open gets no focus from GNOME, so ask for it
+    # ------------------------------------------------------------------
+    def _say(self, msg: str) -> None:
+        if self._log is not None:
+            self._log.info(msg)
+        else:
+            print(msg)
+
+    def _complain(self, msg: str) -> None:
+        if self._log is not None:
+            self._log.warning(msg)
+        else:
+            print(msg)
+
+    @property
+    def focused(self) -> bool:
+        return bool(glfw.get_window_attrib(self._window, glfw.FOCUSED))
+
+    def grab_focus(self, seconds: float = 10.0) -> None:
+        """Ask the window manager to activate the window, retrying for ``seconds``
+        (requests are sent from ``render``, the GLFW thread)."""
+        if seconds <= 0 or self._focus_unsupported:
+            return
+        self._focus_deadline = time.monotonic() + float(seconds)
+        self._focus_next_try = 0.0
+        self._focus_tries = 0
+
+    def _pursue_focus(self) -> None:
+        if self._focus_deadline is None:
+            return
+        now = time.monotonic()
+        if self.focused:
+            if self._focus_tries:
+                self._say(f"window: focused after {self._focus_tries} request(s)")
+            self._focus_deadline = None
+            return
+        if now >= self._focus_deadline:
+            self._complain(f"window: still not focused after {self._focus_tries} requests; "
+                           "the window manager refused it — click the face")
+            self._focus_deadline = None
+            return
+        if now < self._focus_next_try:
+            return
+        self._focus_next_try = now + 0.5
+        self._focus_tries += 1
+        try:
+            if glfw.get_window_attrib(self._window, glfw.ICONIFIED):
+                glfw.restore_window(self._window)
+            glfw.focus_window(self._window)
+        except Exception as e:  # Wayland: GLFW cannot request focus at all
+            self._focus_unsupported = True
+            self._focus_deadline = None
+            self._complain(f"window: cannot request focus on this platform ({e})")
+
+    def _on_focus(self, win, focused) -> None:
+        self._say("window: focus gained" if focused else "window: focus lost")
+
+    def _on_iconify(self, win, iconified) -> None:
+        if iconified:
+            self._complain("window: minimised by the window manager")
+        else:
+            self._say("window: restored")
+
+    # ------------------------------------------------------------------
+    # Fullscreen / viewport
+    # ------------------------------------------------------------------
+    @property
+    def fullscreen(self) -> bool:
+        return self._fullscreen
+
+    def set_fullscreen(self, on: bool) -> None:
+        """Switch between a window and fullscreen on the primary monitor. The
+        design canvas is scaled to fit and letterboxed, so layout is unchanged."""
+        on = bool(on)
+        if on == self._fullscreen:
+            return
+        win = self._window
+        if on:
+            monitor = glfw.get_primary_monitor()
+            mode = glfw.get_video_mode(monitor) if monitor else None
+            if monitor is None or mode is None:
+                return
+            x, y = glfw.get_window_pos(win)
+            w, h = glfw.get_window_size(win)
+            self._windowed_geometry = (x, y, w, h)
+            glfw.set_window_monitor(win, monitor, 0, 0, mode.size.width, mode.size.height, mode.refresh_rate)
+            glfw.set_input_mode(win, glfw.CURSOR, glfw.CURSOR_HIDDEN)
+        else:
+            x, y, w, h = self._windowed_geometry
+            glfw.set_window_monitor(win, None, x, y, w, h, 0)
+            glfw.set_input_mode(win, glfw.CURSOR, glfw.CURSOR_NORMAL)
+        self._fullscreen = on
+        self._update_viewport()
+        if on:
+            # mutter keeps a fullscreen window above the panels only while it is focused
+            self.grab_focus()
+
+    def toggle_fullscreen(self) -> None:
+        self.set_fullscreen(not self._fullscreen)
+
+    def _update_viewport(self) -> None:
+        """Fit the design canvas into the current framebuffer (centred letterbox)."""
+        fbw, fbh = glfw.get_framebuffer_size(self._window)
+        fbw, fbh = max(int(fbw), 1), max(int(fbh), 1)
+        dw, dh = self._design
+        scale = min(fbw / dw, fbh / dh)
+        off_x = (fbw - dw * scale) / 2.0
+        off_y = (fbh - dh * scale) / 2.0
+        self._ctx.viewport = (0, 0, fbw, fbh)
+        self._prog["u_viewport"].value = (float(fbw), float(fbh))
+        self._prog["u_scale"].value    = float(scale)
+        self._prog["u_offset"].value   = (float(off_x), float(off_y))
+
+    def _on_mouse_button(self, win, button, action, mods) -> None:
+        if self._toggle_on_click and button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
+            self.toggle_fullscreen()
+
+    def _on_key(self, win, key, scancode, action, mods) -> None:
+        if action != glfw.PRESS:
+            return
+        if key == glfw.KEY_F and self._toggle_on_click:
+            self.toggle_fullscreen()
+        elif key == glfw.KEY_ESCAPE and self._fullscreen:
+            self.set_fullscreen(False)
+
     # ------------------------------------------------------------------
     def set_mouth_path(self, points: np.ndarray) -> None:
         """Upload a gesture shape as an (N, 2) polyline in normalised units:
@@ -447,8 +624,13 @@ class GlEyeRenderer:
         mouth_skew: float = 0.0,
         mouth_shape: float = 0.0,
         mouth_path: np.ndarray | None = None,
+        wink: float = 0.0,
+        wink_eye: int = 1,
     ) -> None:
         """Render one frame.  Call from your ROS image callback.
+
+        ``wink`` (0..1) closes one eye on top of ``blink``; ``wink_eye`` picks it
+        (0 = screen-left eye, 1 = screen-right eye).
 
         ``mouth_level`` (0..1) drives the waveform amplitude and glow. When
         ``mouth_samples`` is given (1-D array in [-1, 1]) the waveform traces
@@ -462,6 +644,7 @@ class GlEyeRenderer:
             return
 
         glfw.poll_events()
+        self._pursue_focus()
         self._t += dt
 
         self._ctx.clear(0.0, 0.0, 0.0, 1.0)
@@ -494,6 +677,8 @@ class GlEyeRenderer:
             self._prog["u_mouth_shape"].value = 0.0
 
         self._prog["u_blink"].value = float(blink)
+        self._prog["u_wink"].value = float(max(0.0, min(wink, 1.0)))
+        self._prog["u_wink_eye"].value = 1 if int(wink_eye) else 0
         # Flip gaze Y: OpenCV Y is down, OpenGL Y is up — we already flipped in shader,
         # so keep Y consistent with the pixel-coord layout (Y down).
         self._prog["u_gaze"].value  = (float(gaze_offset[0]), float(gaze_offset[1]))
