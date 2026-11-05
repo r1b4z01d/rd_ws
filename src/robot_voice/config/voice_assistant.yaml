@@ -1,0 +1,57 @@
+robot_voice:
+  ros__parameters:
+    # --- ears (microphone → Whisper), runs in ~/.robot_face/voice-venv (provision/setup_voice.sh)
+    ears_enabled: true
+    ears_python: "~/.robot_face/voice-venv/bin/python"
+    asr_model: "base.en"            # tiny.en | base.en | small.en (bigger = better, slower). small.en is more accurate once its model is on the robot
+    asr_device: "cpu"               # cuda once a CUDA ctranslate2 is available on the Jetson
+    asr_compute_type: "int8"        # float16 on cuda
+    asr_threads: 4
+    audio_source: "TONOR"           # pulse source name substring ("" = first USB mic); TONOR G11 = the robot microphone
+    vad_min_rms: 0.012              # absolute floor (frame RMS); the VAD also needs 3x the room noise. TONOR G11 at 80%: speech ~0.03, room ~0.005
+    vad_end_ms: 900                 # silence that ends an utterance (a comma pause is ~0.5 s)
+    # --- wake phrase
+    wake_phrases: ["robot disco"]
+    wake_threshold: 0.74            # fuzzy match score 0..1 (Whisper may write "robo disco")
+    follow_up_seconds: 6.0          # after a bare "Robot Disco", the next sentence is the command
+    ack_sound: true
+    # --- face integration (node name under the launch file is combined_face_hand)
+    say_topic: "/combined_face_hand/say"
+    speaking_topic: "/combined_face_hand/speaking"
+    person_topic: "/combined_face_hand/person"
+    # --- brain: Claude needs ANTHROPIC_API_KEY (see services/robot_voice.conf) or `ant auth login` as rd
+    llm_enabled: true
+    llm_model: "claude-opus-5-5"
+    llm_backend: "auto"             # auto = Claude when a key is present, else a local Ollama model, else rules only
+    ollama_url: "http://192.168.11.119:11434,http://127.0.0.1:11434"   # tried in order: the GPU box (4090), then RD itself
+    ollama_model: "qwen2.5:7b"      # local model on the Orin GPU (ollama pull qwen2.5:7b); needs tool calling
+    persona: "Robot Disco"
+    location_name: "Austin, Texas"  # spoken context for Claude
+    # --- skills
+    weather_latitude: 30.2672       # ZIP 78753 (north Austin, Texas)
+    weather_longitude: -97.7431
+    weather_place: "Austin"         # spoken name for the forecast
+    units: "fahrenheit"
+    news_feeds:
+      - "NPR=https://feeds.npr.org/1001/rss.xml"
+      - "BBC=https://feeds.bbci.co.uk/news/world/rss.xml"
+    hass_url: "http://192.168.1.192"   # Home Assistant (smart.home does not resolve from the robot subnet); token via env HASS_TOKEN
+    hass_token: ""                  # long-lived access token (or env HASS_TOKEN)
+    hass_aliases: [""]              # "kitchen light=light.kitchen_main"
+    music_dir: "~/Music"
+    player_cmd: ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]
+    music_continuous: true          # keep playing the shuffled queue when a song ends
+    music_duck: 0.6                 # music stream volume while the robot listens / thinks / speaks. PulseAudio percent is cubic:
+                                    # 0.6 = -13 dB (a normal duck), 0.4 = -24 dB, 0.25 = -36 dB (near silence), 1.0 = off.
+                                    # Live: ros2 param set /robot_voice music_duck 0.7
+    volume_sink: "C-Media"          # speaker: PulseAudio sink name or fragment (dock USB adapter); volume, chime and music use it
+    volume_step: 10                 # percent per "louder" / "lower the volume"
+    volume_max: 100                 # cap for "full volume"; PulseAudio goes higher but it distorts
+    places_file: "~/rd_ws/Scripts/waypoints.yaml"   # named poses: charger, kitchen, dining, couch_*
+    landmarks_file: "~/rd_ws/Scripts/landmarks/landmarks.yaml"   # the manager's Landmarks tab: more places + their tasks
+    nav_action: "/navigate_to_pose"
+    nav_frame: "map"
+    # --- landmark tasks ("Robot Disco, pick up tigger": drive to the task's landmark, then run its policy)
+    vla_dir: "~/rd_ws/VLA"                # <vla_dir>/run.sh scripts/vla_action.py --model … --task … (preflight, serve, eval_hw --auto)
+    task_nav_timeout: 300.0         # s to reach the landmark before the job is given up
+    task_run_timeout: 600.0         # s on top of the task's own seconds before the run is terminated (SIGTERM = eval EXIT)
