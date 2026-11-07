@@ -8,8 +8,9 @@ files and supervisor:
     active_map          one line, the map's name: what localization_launch.py loads (restart the
                         localization + navigation units after changing it) and what the route editor,
                         the landmarks and the routes are tagged with
-    slam_request.yaml   {mode: new | continue, name, requested} — what online_async_launch.py starts
-                        slam_toolbox with (a fresh map, or continuing <name>'s posegraph)
+    slam_request.yaml   {mode: new | continue, name, requested, start_pose} — what online_async_launch.py
+                        starts slam_toolbox with (a fresh map, or continuing <name>'s posegraph from
+                        start_pose [x, y, yaw] in that map's frame, else from its dock)
 
 Nothing here talks to ROS or supervisor: route_editor.py calls slam_toolbox's save services from its ROS
 thread, and the manager starts / stops the units.
@@ -182,7 +183,11 @@ class MapsStore:
         except FileNotFoundError:
             return None
 
-    def set_slam_request(self, mode: str, name: str) -> dict:
+    def set_slam_request(self, mode: str, name: str, start_pose=None) -> dict:
+        """`start_pose` (continue only) is [x, y, yaw] in the map's own frame: where the robot stands
+        now. Without it slam_toolbox resumes at the posegraph's dock — the spot mapping first started
+        from — so unless the robot is physically parked there, every new scan merges in at an offset
+        and corrupts the map it is supposed to extend."""
         if mode not in ("new", "continue"):
             raise ValueError("mode must be new or continue")
         if not valid_name(name):
@@ -190,6 +195,12 @@ class MapsStore:
         if mode == "continue" and not (self.dir / f"{name}.posegraph").exists():
             raise FileNotFoundError(f"{name!r} has no posegraph to continue from (only maps made with SLAM here have one)")
         req = {"mode": mode, "name": name, "requested": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if mode == "continue" and start_pose is not None:
+            try:
+                x, y, yaw = (float(v) for v in start_pose)
+            except (TypeError, ValueError):
+                raise ValueError(f"start_pose must be [x, y, yaw], got {start_pose!r}") from None
+            req["start_pose"] = [round(x, 4), round(y, 4), round(yaw, 4)]
         with open(self.slam_file, "w") as f:
             f.write("# written by route_editor.py (the manager's Maps tab); online_async_launch.py reads it at start\n")
             yaml.safe_dump(req, f, sort_keys=False)

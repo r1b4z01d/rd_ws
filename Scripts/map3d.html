@@ -130,6 +130,8 @@
     </section>
     <h3>Cameras</h3>
     <div class="row" id="cam-panel"></div>
+    <h3>Drive</h3>
+    <div class="row" id="drive-panel"></div>
     <div id="sim-panel" hidden>
       <h3>Simulation</h3>
       <div class="row"><button id="cone-front">+ cone ahead</button><button id="cone-clear">clear cones</button><span class="muted" id="cone-info">no cones</span></div>
@@ -153,6 +155,7 @@
   </div>
 </div>
 <script src="/static/cams.js"></script>
+<script src="/static/drivepad.js?v=3"></script>
 <script src="/static/swatches.js"></script>
 <script type="module">
 import * as THREE from 'three';
@@ -236,7 +239,9 @@ function setMapTexture() {
     if (mapMesh.material.map) mapMesh.material.map.dispose();
     mapMesh.material.map = t; mapMesh.material.needsUpdate = true;
   };
-  im.src = MAP.image;
+  im.src = MAP.image + (MAP.rev ? "?rev=" + MAP.rev : "");   // without this the browser re-serves the
+                                                             // cached PNG and a growing SLAM map never
+                                                             // reaches the texture
 }
 const costmaps = {};                                      // name -> {mesh, stamp}
 const CM_COLORS = { global: "", local: "" };              // "" = the server's default palette
@@ -678,6 +683,7 @@ function animate() {
   loop(pollTf, 66); loop(pollClouds, () => 1000 / Math.max(1, parseFloat($("#cloudhz").value) || 4)); loop(pollNav, 500); loop(pollCostmaps, 1000); loop(pollTags, 1000);
   applyVisibility(); animate();
   if (window.initCams) initCams({ view: $("#view"), panel: $("#cam-panel"), top: 44 });   // below the tool buttons
+  if (window.initDrivePad) initDrivePad({ view: $("#view"), panel: $("#drive-panel") });
   if (window.initSwatches) initSwatches({ page: "3d", apply: applyColor });
 })();
 </script>

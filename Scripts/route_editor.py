@@ -72,6 +72,8 @@ STATE: dict = {"map": None, "png": None, "pose": None, "pose_t": 0.0, "ros": "of
                # 3D view: every TF frame in the map frame, joint positions, the URDF, nav2 state, raw sensor msgs
                "frames": {}, "joints": {}, "urdf": None, "nav": {}, "particles": None, "latest": {},
                "publish_q": [], "published": None, "want3d": {}, "sim": False,
+               # browser drive pad: the latest setpoint, republished at DRIVE_HZ until it goes stale
+               "drive": {"vx": 0.0, "wz": 0.0, "t": 0.0, "n": 0},
                "jpeg": {}, "cam_want": {},          # name -> {data, seq, t}; name -> last time a viewer pulled it
                "halted": False,                     # the simulator's halt latch (the robot has no latch: goals are gone)
                "ros_up": False,                     # the ROS node (or the simulator) is running — publishing is possible
@@ -94,6 +96,16 @@ SCAN_MAX_POINTS = 720
 NAV_TOPICS = {"plan": "/plan", "local_plan": "/local_plan"}
 POLY_TOPICS = {"footprint": "/local_costmap/published_footprint", "stop": "/polygon_stop", "slowdown": "/polygon_slowdown"}
 CLOUD_BIN_MAX = 20000          # points per /api/cloud.bin answer (the Velodyne has ~29k per revolution)
+# ---- browser drive pad (/api/drive -> /cmd_vel_web -> twist_mux "web", priority 90) --------------
+# Driving a 60 kg robot from a browser over WiFi, so the setpoint is a DEAD MAN, not a latch: the page
+# streams while a stick or key is held and the publisher stops on its own as soon as the stream stops.
+DRIVE_HZ = 20.0                # republish rate (the pad posts at the same rate)
+DRIVE_STALE_S = 0.4            # no command for this long -> zeros, then silence (a dropped WiFi link,
+                               # a closed laptop or a crashed tab all look like this)
+DRIVE_MAX_VX = 0.25            # m/s, the pad's normal scale (joystick.yaml scale_linear.x)
+DRIVE_MAX_WZ = 0.5             # rad/s (scale_angular.yaw)
+DRIVE_TURBO = 4.0              # the pad's turbo multiplier (LB on the 8BitDo: 1.0 m/s, 2.0 rad/s)
+
 FRAME_FRESH_S = 5.0            # a transform stamped older than this is not a fresh fix ...
 FRAME_HOLD_S = 15.0            # ... but the last fresh fix is kept this long (the /tf listener lags in bursts)
 # camera feeds: the three VLA cameras (the camera service's UDP stream, republished as JPEG by
@@ -562,6 +574,33 @@ def ros_pose_thread() -> None:
         cancel_clients = {a: node.create_client(CancelGoal, f"/{a}/_action/cancel_goal")
                           for a in ("follow_waypoints", "navigate_to_pose", "navigate_through_poses")}
         halt_pubs = [node.create_publisher(Twist, "/cmd_vel_joy", 10), node.create_publisher(Twist, "/diff_cont/cmd_vel_unstamped", 10)]
+        # The browser drive pad gets its own thread: the loop below runs at 10 Hz and does the map, TF
+        # and scan work, which is too slow and too jittery to stream velocity through.
+        drive_pub = node.create_publisher(Twist, "/cmd_vel_web", 10)
+
+        def drive_loop():
+            """Republish the pad's setpoint at DRIVE_HZ, and stop by itself when the stream stops.
+
+            A command older than DRIVE_STALE_S is not slowed or held, it is dropped: a few explicit
+            zeros go out (so the wheels stop now rather than when twist_mux times out) and then nothing
+            until the page sends again. Publishing a remembered setpoint here would turn a dropped
+            connection into a robot that keeps driving.
+            """
+            period, zeros_left = 1.0 / DRIVE_HZ, 0
+            while True:                           # daemon thread: it ends with the process, like the spin thread
+                d = STATE["drive"]
+                fresh = d["t"] and (time.time() - d["t"]) <= DRIVE_STALE_S
+                if fresh and (d["vx"] or d["wz"]):
+                    t = Twist()
+                    t.linear.x, t.angular.z = float(d["vx"]), float(d["wz"])
+                    drive_pub.publish(t)
+                    zeros_left = int(DRIVE_HZ * 0.3)      # 0.3 s of zeros when this stream ends
+                elif zeros_left > 0:
+                    drive_pub.publish(Twist())
+                    zeros_left -= 1
+                time.sleep(period)
+
+        threading.Thread(target=drive_loop, daemon=True, name="drive-pad").start()
 
         def _frame2d(frame):
             if frame in ("", "map"):
@@ -923,6 +962,30 @@ def route_maps() -> dict:
     return out
 
 
+def _pose_fresh() -> bool:
+    """True while STATE["pose"] is a live map->base_footprint fix rather than the last one held over."""
+    return bool(STATE["pose"]) and (time.time() - STATE["pose_t"]) <= FRAME_HOLD_S
+
+
+def _slam_seed(name: str, wanted) -> tuple:
+    """Where to resume `name`'s posegraph: ([x, y, yaw], note) or (None, note).
+
+    The pose only means anything when the map being continued is the one the robot is localized in —
+    every map has its own frame, so AMCL's fix in map A says nothing about where the robot stands in
+    map B. The caller passes seed_pose=False to resume at the dock on purpose.
+    """
+    if not wanted:
+        return None, {"seeded": False, "why": "asked to start at the map's dock"}
+    active = MAPS.active()
+    if active != name:
+        return None, {"seeded": False,
+                      "why": f"{name} is not the active map ({active or 'none'}), so the robot's pose is in another map's frame"}
+    if not _pose_fresh():
+        return None, {"seeded": False, "why": f"no live map->base_footprint ({STATE['ros']})"}
+    p = STATE["pose"]
+    return [p["x"], p["y"], p["yaw"]], {"seeded": True, "pose": [p["x"], p["y"], p["yaw"]]}
+
+
 def yaw_of_q(o: dict) -> float:
     z, w = float(o.get("z", 0.0)), float(o.get("w", 1.0))
     return math.atan2(2 * w * z, 1 - 2 * z * z)
@@ -1149,7 +1212,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"routes": route_files(), "maps": route_maps(), "current": current_map_name()})
             elif u.path == "/api/maps":
                 self._json({**MAPS.list(), "current": current_map_name(), "mapping": STATE["mapping"], "slam": STATE["slam"],
-                            "ros_up": STATE["ros_up"], "map_rev": STATE["map_rev"]})
+                            "ros_up": STATE["ros_up"], "map_rev": STATE["map_rev"],
+                            "pose": STATE["pose"] if _pose_fresh() else None})
             elif u.path.startswith("/api/maps/") and u.path.endswith(".png"):
                 name = u.path[len("/api/maps/"):-4]
                 if not valid_map_name(name) or not MAPS.yaml_path(name).exists():
@@ -1183,9 +1247,16 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/3d":
                 self._send(200, (HERE / "map3d.html").read_bytes(), "text/html; charset=utf-8")
             elif u.path.startswith("/static/"):
-                p = static_file(u.path[len("/static/"):])
+                rel = u.path[len("/static/"):]
+                p = static_file(rel)
                 if p:
-                    self._send(200, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"), cache=3600)
+                    # Our own modules (cams.js, swatches.js, drivepad.js) revalidate on every load, so
+                    # editing one and reloading the page is enough. They used to be cached for an hour
+                    # like the vendored bundles, which quietly served a stale drivepad.js for a whole
+                    # debugging session. The vendor/ bundles keep the long cache: they are big and only
+                    # change when something is re-vendored.
+                    self._send(200, p.read_bytes(), MIME.get(p.suffix.lower(), "application/octet-stream"),
+                               cache=86400 if rel.startswith("vendor/") else 0)
                 else:
                     self._send(404, b"not found", "text/plain")
             elif u.path.startswith("/mesh/"):
@@ -1284,6 +1355,35 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/halt":             # the pages' HALT button
                 did = halt(bool(body.get("resume")))
                 self._json({"ok": True, "did": did, "sim": STATE["sim"]})
+                return
+            if u.path == "/api/drive":            # the pages' drive pad: one velocity setpoint, streamed
+                # Deliberately NOT a latch. Each POST keeps the robot moving for DRIVE_STALE_S and no
+                # longer, so the page has to keep sending while a stick or key is held; stopping the
+                # stream (release, blur, a closed tab, lost WiFi) is what stops the robot.
+                if not STATE["ros_up"]:
+                    self._json({"error": "the ROS node is not up (started with --no-ros, or rclpy is missing)"}, 503)
+                    return
+                if STATE["halted"]:       # the simulator's latch only; halt() leaves teleop alone on the
+                    self._json({"error": "the simulator is HALTED — press RESUME before driving"}, 409)
+                    return                # real robot on purpose ("a human is driving"), and sets no latch
+                try:
+                    vx, wz = float(body.get("vx", 0.0)), float(body.get("wz", 0.0))
+                except (TypeError, ValueError):
+                    self._json({"error": "vx and wz must be numbers"}, 400)
+                    return
+                if vx != vx or wz != wz:                      # NaN: clamping would let it through
+                    self._json({"error": "vx and wz must be finite"}, 400)
+                    return
+                turbo = DRIVE_TURBO if body.get("turbo") else 1.0
+                mx, mw = DRIVE_MAX_VX * turbo, DRIVE_MAX_WZ * turbo
+                vx, wz = max(-mx, min(mx, vx)), max(-mw, min(mw, wz))
+                stop = bool(body.get("stop"))
+                d = STATE["drive"]
+                d["vx"], d["wz"] = (0.0, 0.0) if stop else (vx, wz)
+                # t=0 on stop: the publisher sees a stale setpoint, sends its zeros and goes quiet
+                d["t"] = 0.0 if stop else time.time()
+                d["n"] += 1
+                self._json({"ok": True, "vx": d["vx"], "wz": d["wz"], "max": [mx, mw], "stop": stop})
                 return
             if u.path == "/api/publish":          # the 3D page's "nav goal" / "initial pose" click tools
                 kind = body.get("type")
@@ -1407,14 +1507,17 @@ class Handler(BaseHTTPRequestHandler):
         if name == "slam":
             if action == "start":
                 mode, mname = str(body.get("mode") or "new"), str(body.get("name") or "").strip()
+                start_pose, seed = (None, None)
+                if mode == "continue":
+                    start_pose, seed = _slam_seed(mname, body.get("seed_pose", True))
                 try:
-                    req = MAPS.set_slam_request(mode, mname)
+                    req = MAPS.set_slam_request(mode, mname, start_pose)
                 except (ValueError, FileNotFoundError) as e:
                     self._json({"error": str(e)}, 400)
                     return
                 STATE["mapping"] = True
-                STATE["slam"] = {"request": req, "started": time.time()}
-                self._json({"ok": True, "request": req})
+                STATE["slam"] = {"request": req, "started": time.time(), "seed": seed}
+                self._json({"ok": True, "request": req, "seed": seed})
                 return
             if action == "save":
                 mname = str(body.get("name") or (STATE["slam"].get("request") or {}).get("name") or "").strip()

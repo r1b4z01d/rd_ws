@@ -98,6 +98,7 @@
     <input id="spacing" type="number" step="0.1" value="1.0" title="densify spacing, m">
   </div>
   <div class="map-only"><h3>Cameras</h3><div class="row" id="cam-panel"></div></div>
+  <div class="map-only"><h3>Drive</h3><div class="row" id="drive-panel"></div></div>
   <div class="edit-only">
   <h3>Waypoints <span class="muted" id="count"></span></h3>
   <div id="list"></div>
@@ -130,11 +131,27 @@
   <div id="help">click = add after the selected waypoint · drag = move · shift-drag = heading · wheel = zoom · drag empty map = pan · Delete = remove · Ctrl/⌘+Z undo · marked (named, red) poses keep their heading; others face the next by default</div>
 </div>
 <script src="/static/cams.js"></script>
+<script src="/static/drivepad.js?v=3"></script>
 <script src="/static/swatches.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const canvas = $("#c"), ctx = canvas.getContext("2d");
 let MAP = null, img = new Image(), route = {name: "", waypoints: [], initial_pose: null, raw_trace: []};
+// What draw() blits: the map already inverted (or not), rendered ONCE per load instead of filtering
+// every frame. mapBmp is only ever replaced by a fully decoded image, so a reload cannot blank the map
+// (assigning .src to the Image draw() was using emptied it until onload — with SLAM running, map_rev
+// bumps on nearly every 500 ms poll, so the map flashed continuously, and the per-frame invert filter
+// slowed each draw enough to make it worse).
+let mapBmp = null;
+function renderMapBmp(src) {
+  if (!src || !src.naturalWidth) return;
+  const c = document.createElement("canvas");
+  c.width = src.naturalWidth; c.height = src.naturalHeight;
+  const g = c.getContext("2d");
+  if ($("#invertmap").checked) g.filter = "invert(1)";
+  g.drawImage(src, 0, 0);
+  mapBmp = c;
+}
 let sel = -1, pose = null, rosStatus = "", obstacles = [];          // obstacles: the simulator's cones
 let mapTool = "pan", poseDrag = null, toolMsg = "", toolMsgT = 0;     // map mode: nav goal / initial pose tools
 function setMapTool(t) {
@@ -162,7 +179,9 @@ function setMode(m) {
   else { $("#showroute").checked = true; }
   const u = new URL(location); if (m === "map") u.searchParams.set("view", "map"); else u.searchParams.delete("view"); window.history.replaceState(null, "", u);
   renderList(); draw();
+  if (drivePad) drivePad.refresh();            // map mode only: leaving it closes the pad and stops the robot
 }
+let drivePad = null;
 let drag = null;                               // {kind: 'pan'|'move'|'yaw', ...}
 let dirty = false;
 // undo / redo: snapshots of the waypoints (+ initial pose) taken BEFORE each change; a drag is one step
@@ -195,9 +214,7 @@ function draw() {
   const r = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, r.width, r.height);
   ctx.imageSmoothingEnabled = view.scale < 2;
-  if ($("#invertmap").checked) ctx.filter = "invert(1)";
-  ctx.drawImage(img, view.tx, view.ty, MAP.width * view.scale, MAP.height * view.scale);
-  ctx.filter = "none";
+  if (mapBmp) ctx.drawImage(mapBmp, view.tx, view.ty, MAP.width * view.scale, MAP.height * view.scale);
   // costmap overlays (between the map and everything live), at the chosen opacity
   const cmSel = new Set(cmOn());
   for (const [name, cm] of Object.entries(costmaps)) {
@@ -397,7 +414,14 @@ const onScreen = () => window.innerWidth > 0 && window.innerHeight > 0;   // fal
 let halted = false;
 async function reloadMap() {
   MAP = await fetch("/api/map").then(r => r.json());
-  await new Promise(res => { img.onload = () => { resize(); draw(); res(); }; img.onerror = res; img.src = MAP.image + "?rev=" + MAP.rev; });
+  // Double buffered: the live map keeps showing until the new one has decoded. A failed load leaves the
+  // previous picture up rather than a hole.
+  await new Promise(res => {
+    const next = new Image();
+    next.onload = () => { img = next; renderMapBmp(img); resize(); draw(); res(); };
+    next.onerror = res;
+    next.src = MAP.image + "?rev=" + MAP.rev;
+  });
   loadRoutes().catch(() => {});
 }
 async function poll() { if (!onScreen()) { setTimeout(poll, 1000); return; } try { const d = await fetch("/api/pose").then(r => r.json()); pose = d.pose; rosStatus = d.ros; simBadge = (d.sim ? "SIM · " : "") + (d.mapping ? "MAPPING · " : ""); halted = !!d.halted; const hb = $("#halt"); hb.textContent = halted ? "RESUME" : "HALT"; hb.classList.toggle("halted", halted); if (MAP && d.map_rev && d.map_rev !== MAP.rev && !poll.reloading) { poll.reloading = true; reloadMap().finally(() => { poll.reloading = false; }); } } catch (e) { pose = null; } draw(); setTimeout(poll, 500); }
@@ -431,17 +455,18 @@ async function pollCostmaps() {
   draw();
   setTimeout(pollCostmaps, 1000);
 }
-document.querySelectorAll("input.cmlayer").forEach(c => c.onchange = draw); $("#cmalpha").onchange = draw; $("#invertmap").onchange = draw;
+document.querySelectorAll("input.cmlayer").forEach(c => c.onchange = draw); $("#cmalpha").onchange = draw; $("#invertmap").onchange = () => { renderMapBmp(img); draw(); };
 $("#showroute").onchange = draw;
 $("#mode-edit").onclick = () => setMode("edit"); $("#mode-map").onclick = () => setMode("map");
 (async () => {
   MAP = await fetch("/api/map").then(r => r.json());
-  img.onload = () => { resize(); fit(); draw(); }; img.src = MAP.image;
+  img.onload = () => { renderMapBmp(img); resize(); fit(); draw(); }; img.src = MAP.image;
   await loadRoutes();
   const pre = ["tigger_test", "tigger"].find(n => [...$("#routes").options].some(o => o.value === n)); if (pre) { $("#routes").value = pre; await loadRoute(pre); }
   setMode(mode);
   poll(); pollScans(); pollCostmaps();
   if (window.initCams) initCams({ view: canvas.parentElement, panel: $("#cam-panel"), top: 44, enabled: () => mode === "map" });   // map mode only, below the map tools
+  if (window.initDrivePad) drivePad = initDrivePad({ view: canvas.parentElement, panel: $("#drive-panel"), enabled: () => mode === "map" });
   if (window.initSwatches) initSwatches({ page: "map", apply: (k, hex) => {
     if (k in SCAN_COLORS) SCAN_COLORS[k] = hex;
     else if (k === "cm_global" || k === "cm_local") { const n = k.slice(3); CM_COLORS[n] = hex; if (costmaps[n]) costmaps[n].stamp = null; }
