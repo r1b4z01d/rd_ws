@@ -1,0 +1,34 @@
+diff --git a/src/roboclaw_hardware_interface.cpp b/src/roboclaw_hardware_interface.cpp
+index e8dbd1d..4bb58e8 100644
+--- a/src/roboclaw_hardware_interface.cpp
++++ b/src/roboclaw_hardware_interface.cpp
+@@ -31,10 +31,27 @@ CallbackReturn RoboClawHardwareInterface::on_init(const HardwareInfo & hardware_
+     return CallbackReturn::ERROR;
+   }
+ 
++  // Optional baud rate: needed on a real UART (USB-TTL adapter, Jetson ttyTHS*); leave it out for
++  // the RoboClaw's own USB port, where the tty speed is meaningless.
++  int baud_rate = 0;
++  if (hardware_info.hardware_parameters.count("baud_rate")) {
++    try {
++      baud_rate = std::stoi(hardware_info.hardware_parameters.at("baud_rate"));
++    } catch (const std::exception &) {
++      std::cerr << "baud_rate must be an integer." << std::endl;
++      return CallbackReturn::ERROR;
++    }
++  }
++
+   // Try to establish a connection to the roboclaw
+   try {
+-    // Read the serial port from hardware parameters
+-    auto device = std::make_shared<roboclaw_serial::SerialDevice>(serial_port);
++    auto device = std::make_shared<roboclaw_serial::SerialDevice>(serial_port, baud_rate);
++    if (!device->connected()) {
++      // Fail here instead of letting the first read() throw inside controller_manager's update
++      // loop, which aborts the whole process (std::terminate) and takes joint_broad down with it.
++      std::cerr << "RoboClaw serial device " << serial_port << " could not be opened." << std::endl;
++      return CallbackReturn::ERROR;
++    }
+     interface_ = std::make_shared<roboclaw_serial::Interface>(device);
+   } catch (const std::exception & e) {
+     std::cerr << e.what() << std::endl;

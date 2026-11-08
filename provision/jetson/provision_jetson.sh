@@ -119,8 +119,46 @@ UNIT
   echo xpad | sudo tee /etc/modules-load.d/xpad.conf >/dev/null
   sudo modprobe xpad || warn "xpad module not available on this kernel"
 
-  log "jtop (jetson-stats) for monitoring"
-  sudo python3 -m pip install -U jetson-stats || warn "jetson-stats install failed"
+  # The RoboClaw motor controller talks packet serial on the 40-pin header UART (pins 8 TX / 10 RX /
+  # 6 GND = ttyTHS1 = serial@3100000). On JetPack 6 that UART's receive DMA hands back zeroed bytes
+  # (NVIDIA forum "DMA on /dev/ttyTHS1 corrupts receiving data"); ttyTHS2 ships without DMA bindings
+  # and is fine, so boot a copy of the stock device tree with the two DMA properties removed, via an
+  # FDT line in extlinux.conf (the mechanism jetson-io uses). Takes effect at the next reboot.
+  log "ttyTHS1 (header UART, RoboClaw link) in PIO mode"
+  uart1_pio_dtb
+}
+
+# Idempotent: rebuilds the PIO copy when the stock DTB is newer (kernel/dtb package update), leaves an
+# extlinux.conf that already has an FDT line (jetson-io) alone, keeps the stock entry as a boot-menu fallback.
+uart1_pio_dtb() {
+  local base pio conf=/boot/extlinux/extlinux.conf
+  base=$(ls /boot/dtb/kernel_tegra234-*.dtb 2>/dev/null | grep -v -- '-uart1-pio' | head -1)
+  [ -n "$base" ] || { warn "no /boot/dtb/kernel_tegra234-*.dtb; skipping the ttyTHS1 PIO device tree"; return; }
+  pio="${base%.dtb}-uart1-pio.dtb"
+  if [ ! -f "$pio" ] || [ "$base" -nt "$pio" ]; then
+    sudo cp "$base" "$pio"
+    sudo fdtput -d "$pio" /bus@0/serial@3100000 dma-names
+    sudo fdtput -d "$pio" /bus@0/serial@3100000 dmas
+    log "built $pio (stock tree minus serial@3100000 dmas/dma-names)"
+  fi
+  if grep -q "FDT $pio" "$conf"; then
+    log "extlinux.conf already boots $pio"
+  elif grep -qE '^\s*FDT ' "$conf"; then
+    warn "extlinux.conf already has an FDT line (jetson-io?): not touched; drop dmas/dma-names from serial@3100000 in that DTB instead"
+  else
+    sudo cp -n "$conf" "$conf.pre-uart1-pio"
+    sudo python3 - "$conf" "$pio" <<'PY'
+import re, sys
+conf, pio = sys.argv[1], sys.argv[2]
+s = open(conf).read()
+m = re.search(r"^(\s*)LINUX /boot/Image\n", s, re.M)
+s = s[:m.end()] + m.group(1) + "FDT " + pio + "\n" + s[m.end():]
+append = re.search(r"^\s*APPEND .*$", s, re.M).group(0)
+s = s.rstrip("\n") + "\n\nLABEL stock\n      MENU LABEL stock device tree (ttyTHS1 with DMA)\n      LINUX /boot/Image\n      INITRD /boot/initrd\n" + append + "\n"
+open(conf, "w").write(s)
+PY
+    log "extlinux.conf: primary entry boots $pio ('stock' entry kept, backup $conf.pre-uart1-pio); reboot to apply"
+  fi
 }
 
 # cuSPARSELt is dlopen'ed by NVIDIA's torch wheels and is not part of JetPack. Try apt from NVIDIA's CUDA

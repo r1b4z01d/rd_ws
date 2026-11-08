@@ -210,6 +210,10 @@ phase_workspace() {
   # apriltag_ros-single-opencv.patch — on JetPack the apt cv_bridge/image_geometry link Ubuntu's
   # OpenCV 4.5 while find_package(OpenCV) gives NVIDIA's 4.8; two OpenCVs in the tag container
   # abort it ("Assertion failed s >= 0 in setSize"), so the node converts the image itself.
+  # roboclaw_serial-baud-rate.patch + roboclaw_hardware_interface-baud-rate.patch — the RoboClaw is on a
+  # real UART since 2026-11-08 (Jetson header ttyTHS1, its USB jack is bad): a `baud_rate` hardware
+  # parameter sets the tty speed, a failed open fails on_init instead of aborting controller_manager,
+  # and a reply is read until the line goes quiet (a UART delivers it in pieces, USB CDC in one read).
   local patch sm_dir
   for patch in "$HERE"/patches/*.patch; do
     [ -e "$patch" ] || continue

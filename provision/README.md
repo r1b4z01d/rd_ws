@@ -126,7 +126,8 @@ From the workstation, `ssh RD` should now work (the `RD` host entry in `~/.ssh/c
 ```bash
 sudo supervisorctl status            # route editor, collision monitor and ollama RUNNING; foxglove bridge/studio are manual-start
 sudo supervisorctl status ollama && curl -s 127.0.0.1:11434/api/tags | head -c 200   # the local LLM answers
-ls -l /dev/ttyACM0 /dev/ttyUSB0      # RoboClaw, RPLiDAR (dialout)
+ls -l /dev/ttyTHS1 /dev/ttyUSB0      # RoboClaw (header UART, since 2026-11-08), RPLiDAR (dialout)
+sudo dmesg | grep '3100000.serial'   # must say 'RX in PIO mode' (the PIO device tree is booted; see *RoboClaw on the header UART*)
 rs-enumerate-devices | head          # RealSense seen
 sudo supervisorctl start robot_face  # the face appears on the robot's screen (~/start_face.sh is the manual fallback)
 sudo supervisorctl start robot_disco robot_disco_localization robot_disco_navigation && ros2 topic list | head
@@ -162,7 +163,7 @@ unchanged. `all` = `preflight base jetson data ros groups udev sysctl workspace 
 |---|---|
 | `preflight` | requires aarch64, `/etc/nv_tegra_release`, Ubuntu 22.04; prints L4T + CUDA versions |
 | `base` | adds `jetson/apt-packages-jetson.txt` (boost, cmake, ninja, pkg-config, openblas, python3-dev for the source builds). Deliberately **not** `nvidia-jetpack`: the flash already has CUDA 12.6, cuDNN 9 and cuBLAS, and the metapackage would add several GB to the 64 GB eMMC |
-| `jetson` *(new)* | power mode `NVPMODEL` (0 = MAXN) as the boot default in `/etc/nvpmodel.conf` plus `/var/lib/nvpmodel/status` (nvpmodel restores the last mode from there), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop`, and `xpad` in `/etc/modules-load.d/xpad.conf` for the gamepad receiver |
+| `jetson` *(new)* | power mode `NVPMODEL` (0 = MAXN) as the boot default in `/etc/nvpmodel.conf` plus `/var/lib/nvpmodel/status` (nvpmodel restores the last mode from there), a `jetson-clocks.service`, nvidia docker runtime as default, `jtop`, and `xpad` in `/etc/modules-load.d/xpad.conf` for the gamepad receiver, and the ttyTHS1 PIO device tree for the RoboClaw link (`uart1_pio_dtb`: stock DTB minus `serial@3100000` `dmas`/`dma-names`, booted via an `FDT` line in extlinux.conf, stock entry kept; see *RoboClaw on the header UART*) |
 | `data` *(new)* | optional second drive (the 512 GB NVMe, ext4 label `data`): fstab `nofail` + mount at `/mnt/data`, then `~/rd_ws` (VLA inside it), `~/.cache/huggingface` and `~/.cache/robot_descriptions` become **symlinks** onto it (an existing tree is rsync-copied, checksum-verified and removed; refused while something runs from it), plus a `supervisor.service.d` drop-in so the units wait for the mount. No drive → no-op. |
 | `vla` | cuSPARSELt (`CUSPARSELT_VERSION`, 0.7.1.0), then **torch 2.8.0 / torchvision 0.23.0 from `https://pypi.jetson-ai-lab.io/jp6/cu126`** (`JETSON_TORCH`, `JETSON_TORCHVISION`, `JETSON_PIP_INDEX`) (CUDA builds; PyPI torch has no Jetson CUDA), then `jetson/pip-vla-jetson.txt` = `lerobot[smolvla]==0.4.4` + the rest. `ur_rtde` and `moderngl` compile from source (no arm64 wheels). Asserts `torch.cuda.is_available()`. |
 | `infer` *(new)* | `outputs/serve_ckpt` symlink (`SERVE_CKPT=`), installs `VLA/services/rd/vla_infer_server.conf` via `install_services.sh rd`; the same install drops `vla_teleop` / `vla_eval` (manual start: `sudo supervisorctl start vla_teleop`, arguments in `~/rd_ws/VLA/config/teleop.env` / `eval.env`) |
@@ -266,6 +267,45 @@ run needed are now in the scripts:
   HuggingFaceTB/SmolVLM2-500M-Video-Instruct) in `~/.cache/huggingface/hub`; the unit runs offline.
   `provision_jetson.sh infer` downloads it while the box still has internet; on the robot subnet copy
   the `models--HuggingFaceTB--*` folder from the GPU box instead.
+
+## RoboClaw on the header UART (since 2026-11-08)
+
+The base's RoboClaw 2x15A (firmware 4.3.6) no longer hangs off USB: its USB jack is mechanically bad
+(enumerates only when pressed; "device descriptor read/64, error -32" on every Jetson port), and when it
+was moved from its own battery to a DC-DC converter shared with the audio amp, plugging that USB in
+reset the Jetson twice (ground offset through the cable). It now talks packet serial on the Jetson's
+40-pin header: **pin 8 (TX) -> S1, pin 10 (RX) <- S2, pin 6 GND**, 3.3 V levels, `/dev/ttyTHS1`
+(`serial@3100000`, `uarta`; `config-by-pin.py -n 1 -p 8` says `uarta`). Three things make it work:
+
+1. **RoboClaw config**: packet serial mode (7 = address 0x80), 115200, plus a 0.5 s serial timeout as a
+   watchdog (the board otherwise keeps the last speed when the link dies). The board had been in RC mode
+   (S1/S2 are servo inputs there; USB ignored the mode, so nobody noticed). Set with the buttons
+   (MODE -> SET to 7 -> LIPO; same for the baud menu, option 6) or over any serial link with
+   `provision/tools/roboclaw_config.py` (on the robot: `~/rd_ws/provision/tools/`; `--set-mode packet --set-baud 115200 --set-addr 128
+   --timeout 5 --save`; cmd 94 "write EEPROM" is not acknowledged by firmware 4.3.6, so check after a
+   power cycle). `provision/tools/roboclaw_probe_uart.py /dev/ttyTHS1 115200` is the link test (`uart_capture.py` shows
+   the raw reply, `uart_loopback.py` checks pins 8/10 with a jumper).
+2. **Jetson device tree** (phase `jetson`, `uart1_pio_dtb`): on JetPack 6 the UART's receive DMA returns
+   zeroed bytes (the reply has the right length and framing, DMA-read bytes are 0x00; NVIDIA forum
+   "DMA on /dev/ttyTHS1 corrupts receiving data"). `ttyTHS2` ships without DMA bindings and is fine, so
+   the stock `/boot/dtb/kernel_tegra234-*.dtb` is copied to `...-uart1-pio.dtb` with `dmas`/`dma-names`
+   removed from `serial@3100000` and booted via an `FDT` line in `/boot/extlinux/extlinux.conf` (what
+   jetson-io does; the `stock` entry stays as a fallback). `dmesg | grep 3100000.serial` must say
+   `RX in PIO mode`. Regenerate the copy after a kernel/dtb package update (the phase does when the
+   stock file is newer).
+3. **Driver patches** (`patches/roboclaw_serial-baud-rate.patch`,
+   `patches/roboclaw_hardware_interface-baud-rate.patch`, applied by `workspace`): a `baud_rate`
+   hardware parameter (the upstream driver never set the tty speed, USB CDC did not care), a failed open
+   fails `on_init` instead of aborting controller_manager on the first read, and a reply is read until
+   the line goes quiet (USB delivered a reply in one `read()`, a UART delivers it in pieces, which the
+   CRC check then rejected). `robot_disco/description/ros2_control.xacro` carries
+   `serial_port=/dev/ttyTHS1`, `baud_rate=115200`.
+
+Traps: never open a `ttyTHS*` below 9600 baud. The Tegra driver enables the FIFO before it sets the
+speed on the next open, and a 2400-baud leftover (uart clock 38400 Hz) makes every open fail with
+`Failed to enable FIFO mode: -110` until `echo 1843200 | sudo tee /sys/kernel/debug/bpmp/debug/clk/uarta/rate`
+(no reboot needed). After a RoboClaw link loss the controller manager still has to be restarted by hand
+(`sudo supervisorctl restart robot_disco`); `launch_robot.launch.py` deliberately does not respawn it.
 
 ## Provisioning without internet (box already on the robot subnet)
 

@@ -30,6 +30,7 @@ rsync -a -e "$SSH" services/robot_face.conf services/robot_voice.conf RD:/home/r
 rsync -a -e "$SSH" provision/setup_faceid.sh provision/setup_voice.sh provision/setup_kokoro.sh \
                    provision/provision.sh provision/capture_rd_state.sh RD:/home/rd/rd_ws/provision/
 rsync -a -e "$SSH" provision/jetson/provision_jetson.sh RD:/home/rd/rd_ws/provision/jetson/
+rsync -a -e "$SSH" provision/tools/ RD:/home/rd/rd_ws/provision/tools/                  # RoboClaw / UART probes
 rsync -a -e "$SSH" README.md RD:/home/rd/rd_ws/
 if [ $VLA = 1 ]; then
   # a robot still on the old layout (~/VLA beside ~/rd_ws) must be moved first, or this would plant a second,

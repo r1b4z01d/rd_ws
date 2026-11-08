@@ -1,0 +1,150 @@
+diff --git a/include/roboclaw_serial/device.hpp b/include/roboclaw_serial/device.hpp
+index 3e98904..e97f264 100644
+--- a/include/roboclaw_serial/device.hpp
++++ b/include/roboclaw_serial/device.hpp
+@@ -21,6 +21,7 @@
+ #include <cstdint>
+ #include <iostream>
+ #include <memory>
++#include <stdexcept>
+ #include <string>
+ 
+ namespace roboclaw_serial
+@@ -33,16 +34,22 @@ public:
+ 
+   SerialDevice() = default;
+ 
+-  explicit SerialDevice(const std::string device) {connect(device);}
++  // baud_rate 0 keeps whatever speed the tty already has (fine for USB CDC, where the rate is
++  // meaningless); a real UART (USB-TTL adapter or the Jetson's ttyTHS*) needs the RoboClaw's
++  // packet-serial rate here.
++  explicit SerialDevice(const std::string device, int baud_rate = 0) {connect(device, baud_rate);}
+   virtual ~SerialDevice() {disconnect();}
+ 
+-  virtual bool connect(const std::string & device)
++  // The original one-argument signature stays virtual so test doubles can still override it.
++  virtual bool connect(const std::string & device) {return connect(device, 0);}
++
++  bool connect(const std::string & device, int baud_rate)
+   {
+     fd_ = open(device.c_str(), O_RDWR | O_NOCTTY);
+     connected_ = fd_ != -1;
+ 
+     if (connected_) {
+-      setSerialDeviceOptions();
++      setSerialDeviceOptions(baud_rate);
+     } else {
+       std::cerr << "Failed to open serial device: " << device << std::endl;
+       perror("Error");
+@@ -71,40 +78,77 @@ public:
+     return static_cast<std::size_t>(result) == count;
+   }
+ 
++  // One RoboClaw reply, however it arrives. On the RoboClaw's own USB port a whole reply shows up in
++  // a single read(); on a real UART (USB-TTL adapter, the Jetson's ttyTHS*) the bytes trickle in and a
++  // single read() returns only the first few, which the packet layer then rejects as a CRC error. So
++  // keep reading until `count` bytes are in or the line has been quiet for a few byte-times. Nothing
++  // at all within the initial window is a timeout, as before.
+   virtual std::size_t read(std::byte * buffer, std::size_t count)
+   {
+-    fd_set set;
+-    struct timeval timeout;
++    std::size_t total = 0;
++    while (total < count) {
++      // 25 ms for the first byte (reply latency), then a 3 ms gap (~35 byte-times at 115200) ends the reply
++      if (!waitReadable(total == 0 ? 25000 : 3000)) {
++        if (total == 0) {
++          throw std::runtime_error("Read timeout!");
++        }
++        break;
++      }
++      ssize_t result = ::read(fd_, buffer + total, count - total);
++      if (result < 0) {
++        // Error reading from the device
++        throw std::range_error("Error reading from the serial device!");
++      }
++      if (result == 0) {
++        break;
++      }
++      total += static_cast<std::size_t>(result);
++    }
++    return total;
++  }
+ 
+-    /* Initialize the file descriptor set. */
++protected:
++  bool connected_ = false;
++
++private:
++  // select() returns 0 if timeout, 1 if input available, -1 if error.
++  bool waitReadable(int timeout_us) const
++  {
++    fd_set set;
+     FD_ZERO(&set);
+     FD_SET(fd_, &set);
+-
+-    /* Initialize the timeout data structure. */
++    struct timeval timeout;
+     timeout.tv_sec = 0;
+-    timeout.tv_usec = 10000;  // 10ms
+-
+-    /* select returns 0 if timeout, 1 if input available, -1 if error. */
+-    int res = select(FD_SETSIZE, &set, NULL, NULL, &timeout);
++    timeout.tv_usec = timeout_us;
++    const int res = select(fd_ + 1, &set, NULL, NULL, &timeout);
+     if (res < 0) {
+       throw std::range_error("Error reading from the serial device!");
+-    } else if (res == 0) {
+-      throw std::runtime_error("Read timeout!");
+-    }
+-    ssize_t result = ::read(fd_, buffer, count);
+-    if (result < 0) {
+-      // Error reading from the device
+-      throw std::range_error("Error reading from the serial device!");
+     }
+-
+-    return static_cast<std::size_t>(result);
++    return res > 0;
+   }
+ 
+-protected:
+-  bool connected_ = false;
++  static speed_t speedConstant(int baud_rate)
++  {
++    switch (baud_rate) {
++      case 9600: return B9600;
++      case 19200: return B19200;
++      case 38400: return B38400;
++      case 57600: return B57600;
++      case 115200: return B115200;
++#ifdef B230400
++      case 230400: return B230400;
++#endif
++#ifdef B460800
++      case 460800: return B460800;
++#endif
++      default:
++        throw std::invalid_argument(
++                "Unsupported baud_rate " + std::to_string(baud_rate) +
++                " (use 9600, 19200, 38400, 57600, 115200, 230400 or 460800)");
++    }
++  }
+ 
+-private:
+-  void setSerialDeviceOptions()
++  void setSerialDeviceOptions(int baud_rate)
+   {
+     struct termios options;
+     tcgetattr(fd_, &options);
+@@ -112,6 +156,11 @@ private:
+     options.c_iflag = IGNPAR;
+     options.c_oflag = 0;
+     options.c_lflag = 0;
++    if (baud_rate > 0) {
++      const speed_t speed = speedConstant(baud_rate);
++      cfsetispeed(&options, speed);
++      cfsetospeed(&options, speed);
++    }
+     tcflush(fd_, TCIFLUSH);
+     tcsetattr(fd_, TCSANOW, &options);
+ 
