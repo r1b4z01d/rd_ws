@@ -270,20 +270,22 @@ run needed are now in the scripts:
 
 ## RoboClaw on the header UART (since 2026-11-08)
 
-The base's RoboClaw 2x15A (firmware 4.3.6) no longer hangs off USB: its USB jack is mechanically bad
+The base's RoboClaw 2x15A (firmware 4.4.9) no longer hangs off USB: its USB jack is mechanically bad
 (enumerates only when pressed; "device descriptor read/64, error -32" on every Jetson port), and when it
 was moved from its own battery to a DC-DC converter shared with the audio amp, plugging that USB in
 reset the Jetson twice (ground offset through the cable). It now talks packet serial on the Jetson's
 40-pin header: **pin 8 (TX) -> S1, pin 10 (RX) <- S2, pin 6 GND**, 3.3 V levels, `/dev/ttyTHS1`
 (`serial@3100000`, `uarta`; `config-by-pin.py -n 1 -p 8` says `uarta`). Three things make it work:
 
-1. **RoboClaw config**: packet serial mode (7 = address 0x80), 115200, plus a 0.5 s serial timeout as a
+1. **RoboClaw config**: packet serial mode (7 = address 0x80), 115200, plus a 1 s serial timeout as a
    watchdog (the board otherwise keeps the last speed when the link dies). The board had been in RC mode
-   (S1/S2 are servo inputs there; USB ignored the mode, so nobody noticed). Set with the buttons
-   (MODE -> SET to 7 -> LIPO; same for the baud menu, option 6) or over any serial link with
-   `provision/tools/roboclaw_config.py` (on the robot: `~/rd_ws/provision/tools/`; `--set-mode packet --set-baud 115200 --set-addr 128
-   --timeout 5 --save`; cmd 94 "write EEPROM" is not acknowledged by firmware 4.3.6, so check after a
-   power cycle). `provision/tools/roboclaw_probe_uart.py /dev/ttyTHS1 115200` is the link test (`uart_capture.py` shows
+   (S1/S2 are servo inputs there; USB ignored the mode, so nobody noticed). Set and saved with **Motion
+   Studio over USB** (2026-11-08, which also took the firmware from 4.3.6 to 4.4.9; verified to survive a
+   power cycle), or with the buttons (MODE -> SET to 7 -> LIPO, then SET menu option 6 -> LIPO). Over
+   packet serial the settings only changed in RAM on 4.3.6 (the save command 94 was never acknowledged
+   and everything reverted at the next power cycle), so `provision/tools/roboclaw_config.py` (on the
+   robot: `~/rd_ws/provision/tools/`) is for reading the config and for RAM-only changes.
+   `provision/tools/roboclaw_probe_uart.py /dev/ttyTHS1 115200` is the link test (`uart_capture.py` shows
    the raw reply, `uart_loopback.py` checks pins 8/10 with a jumper).
 2. **Jetson device tree** (phase `jetson`, `uart1_pio_dtb`): on JetPack 6 the UART's receive DMA returns
    zeroed bytes (the reply has the right length and framing, DMA-read bytes are 0x00; NVIDIA forum
